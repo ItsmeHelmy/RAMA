@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "description": "RAMA (Request, Align, Monitor, Approve) - AI-Powered Release Orchestration & Approval Middleware for BSI UII",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "PATH=\"/Users/itsmehelmy/.nvm/versions/node/v22.23.4/bin:$PATH\" next dev --hostname 0.0.0.0",
-    "build": "PATH=\"/Users/itsmehelmy/.nvm/versions/node/v22.23.4/bin:$PATH\" next build",
+    "build": "PATH=\"/Users/itsmehelmy/.nvm/versions/node/v22.23.4/bin:$PATH\" node scripts/build.mjs",
+    "cf:build": "PATH=\"/Users/itsmehelmy/.nvm/versions/node/v22.23.4/bin:$PATH\" node scripts/build.mjs --static",
     "start": "PATH=\"/Users/itsmehelmy/.nvm/versions/node/v22.23.4/bin:$PATH\" next start --hostname 0.0.0.0"
   },
   "dependencies": {

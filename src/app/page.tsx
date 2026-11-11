@@ -21,6 +21,14 @@ import { ApprovalLog, ReleaseRequest, ReleaseStatus, User } from "@/lib/types";
 import { evaluateRisk, parseChangedFiles } from "@/lib/risk-engine";
 import { canDecide, LAYERS, REQUIRED_ROLE_BY_STATUS, ROLE_LABEL, STATUS_LABEL } from "@/lib/workflow";
 import {
+  browserCreateRelease,
+  browserDecide,
+  browserGetDashboard,
+  browserRegenerateSummary,
+  browserResetDemo,
+  browserResubmit,
+} from "@/lib/browser-store";
+import {
   AiSummaryBlock,
   DecisionPanel,
   DeveloperQuestions,
@@ -88,8 +96,17 @@ export default function RamaPage() {
   }, []);
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/releases", { cache: "no-store" });
-    const data = await res.json();
+    let data: ReturnType<typeof browserGetDashboard>;
+    try {
+      const res = await fetch("/api/releases", { cache: "no-store" });
+      if (res.ok && res.headers.get("content-type")?.includes("application/json")) {
+        data = await res.json();
+      } else {
+        data = browserGetDashboard();
+      }
+    } catch {
+      data = browserGetDashboard();
+    }
     setUsers(data.users);
     setReleases(data.releases);
     setLogs(data.logs);
@@ -119,10 +136,25 @@ export default function RamaPage() {
   // Aksi (semua lewat API; server yang memutuskan boleh/tidak)
   // -------------------------------------------------------------------------
 
-  async function post(url: string, body: Record<string, unknown>) {
-    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const data = await res.json().catch(() => ({}));
-    return { status: res.status, data };
+  async function post(url: string, body: Record<string, unknown>): Promise<{ status: number; data: Record<string, any> }> {
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (res.status !== 404 && res.status !== 405 && res.headers.get("content-type")?.includes("application/json")) {
+        const data = await res.json().catch(() => ({}));
+        return { status: res.status, data };
+      }
+    } catch {
+      // Fallback to browser simulation store on static Cloudflare hosting
+    }
+    if (url === "/api/demo/reset") return { status: 200, data: browserResetDemo() };
+    if (url === "/api/releases") return browserCreateRelease(body);
+    const decMatch = url.match(/^\/api\/releases\/(\d+)\/decision$/);
+    if (decMatch) return browserDecide(Number(decMatch[1]), body);
+    const resubMatch = url.match(/^\/api\/releases\/(\d+)\/resubmit$/);
+    if (resubMatch) return browserResubmit(Number(resubMatch[1]), body);
+    const sumMatch = url.match(/^\/api\/releases\/(\d+)\/summary$/);
+    if (sumMatch) return browserRegenerateSummary(Number(sumMatch[1]), body);
+    return { status: 404, data: { error: "Endpoint tidak ditemukan." } };
   }
 
   async function decide(release: ReleaseRequest, action: "APPROVE" | "REJECT", note: string, opts?: { omitLayer?: boolean }) {
@@ -731,25 +763,41 @@ function CreateReleaseModal({
     e.preventDefault();
     setSubmitting(true);
     setError(null);
-    const res = await fetch("/api/releases", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        actor_id: actor.id,
-        judul,
-        modul,
-        repo,
-        feature_branch: branch,
-        rollback_plan: rollback,
-        git_diff: diff,
-        preset_key: presetKey || undefined,
-        api_key: apiKey || undefined,
-      }),
-    });
-    const data = await res.json();
+    const payload = {
+      actor_id: actor.id,
+      judul,
+      modul,
+      repo,
+      feature_branch: branch,
+      rollback_plan: rollback,
+      git_diff: diff,
+      preset_key: presetKey || undefined,
+      api_key: apiKey || undefined,
+    };
+    let status = 500;
+    let data: Record<string, any> = {};
+    try {
+      const res = await fetch("/api/releases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.status !== 404 && res.status !== 405 && res.headers.get("content-type")?.includes("application/json")) {
+        status = res.status;
+        data = await res.json();
+      } else {
+        const fb = await browserCreateRelease(payload);
+        status = fb.status;
+        data = fb.data;
+      }
+    } catch {
+      const fb = await browserCreateRelease(payload);
+      status = fb.status;
+      data = fb.data;
+    }
     setSubmitting(false);
-    if (!res.ok) return setError(`HTTP ${res.status}: ${data.error}`);
-    onCreated(data.release);
+    if (status >= 400) return setError(`HTTP ${status}: ${data.error}`);
+    onCreated(data.release as ReleaseRequest);
   }
 
   const input = "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none";
