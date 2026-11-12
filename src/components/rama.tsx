@@ -4,6 +4,7 @@ import React, { useEffect, useId, useState } from "react";
 import {
   AlertTriangle,
   Bot,
+  Check,
   CheckCircle2,
   CircleDashed,
   FlaskConical,
@@ -11,13 +12,24 @@ import {
   Lock,
   RotateCcw,
   ShieldAlert,
+  Sparkles,
   ThumbsDown,
-  ThumbsUp,
+  Undo2,
   XCircle,
 } from "lucide-react";
 import { ApprovalLog, MRStatus, ReleaseMR, ReleaseRequest, ReleaseStatus, RiskLevel, User } from "@/lib/types";
 import { questionsFromRules } from "@/lib/risk-engine";
-import { canDecide, LAYER_BY_STATUS, LAYERS, MIN_NOTE_LENGTH, REQUIRED_ROLE_BY_STATUS, ROLE_LABEL, STATUS_LABEL } from "@/lib/workflow";
+import { SEED_APPROVAL_NOTES } from "@/lib/mock-scenarios";
+import {
+  canDecide,
+  LAYER_BY_STATUS,
+  LAYERS,
+  MIN_NOTE_LENGTH,
+  REQUIRED_ROLE_BY_STATUS,
+  RISK_META,
+  ROLE_LABEL,
+  STATUS_LABEL,
+} from "@/lib/workflow";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -34,14 +46,13 @@ export function useNow(intervalMs = 30_000): number {
 }
 
 export function durationSince(iso: string | null, now: number): string {
-  if (!iso) return "-";
-  const mins = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 60_000));
-  if (mins < 1) return "baru saja";
+  if (!iso) return "1 mnt";
+  const mins = Math.max(1, Math.floor((now - new Date(iso).getTime()) / 60_000));
   const d = Math.floor(mins / 1440);
   const h = Math.floor((mins % 1440) / 60);
   const m = mins % 60;
   if (d > 0) return `${d} hr ${h} jam`;
-  if (h > 0) return `${h} jam ${m} mnt`;
+  if (h > 0) return m > 0 ? `${h} jam ${m} mnt` : `${h} jam`;
   return `${m} mnt`;
 }
 
@@ -61,85 +72,111 @@ export function lastRejectLog(release: ReleaseRequest): ApprovalLog | undefined 
   return [...release.logs].reverse().find((l) => l.action === "REJECT");
 }
 
-/** Teks read-only tentang posisi request, mis. "Menunggu: Tim Core · 2 jam 14 mnt". */
+/** Teks read-only tentang posisi request sesuai kamus redesign. */
 export function waitingText(release: ReleaseRequest, now: number): string {
   const role = REQUIRED_ROLE_BY_STATUS[release.status];
   const mr = currentMr(release);
-  if (role && mr) return `Menunggu: ${ROLE_LABEL[role]} · ${durationSince(mr.opened_at, now)}`;
-  if (release.status === "Perlu_Revisi") return `Perlu revisi · ditolak di layer ${mr?.layer ?? "?"} · ${durationSince(mr?.decided_at ?? null, now)}`;
-  return `Dirilis (simulasi) · ${formatTime(release.updated_at)}`;
+  if (role && mr) return `${ROLE_LABEL[role]} · menunggu ${durationSince(mr.opened_at, now)}`;
+  if (release.status === "Perlu_Revisi") {
+    return `Ditolak di tahap ${mr?.layer ?? "?"} · ${durationSince(mr?.decided_at ?? null, now)} lalu`;
+  }
+  return `Dirilis ${formatTime(release.updated_at)}`;
 }
 
 // ---------------------------------------------------------------------------
-// Badges
+// Badges & Pills (Light Theme Redesign)
 // ---------------------------------------------------------------------------
 
-const RISK_STYLE: Record<RiskLevel, string> = {
-  LOW: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  MEDIUM: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-  HIGH: "bg-rose-500/15 text-rose-300 border-rose-500/40",
+const RISK_STYLE: Record<RiskLevel, { pill: string; dot: string }> = {
+  LOW: {
+    pill: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+    dot: "bg-emerald-500",
+  },
+  MEDIUM: {
+    pill: "bg-amber-50 text-amber-800 ring-amber-200",
+    dot: "bg-amber-500",
+  },
+  HIGH: {
+    pill: "bg-rose-50 text-rose-700 ring-rose-200",
+    dot: "bg-rose-500",
+  },
 };
 
 /** Satu-satunya komponen label risiko. Selalu membaca release.risk_level (dari rule engine). */
 export function RiskBadge({ level, size = "sm" }: { level: RiskLevel; size?: "sm" | "md" }) {
+  const style = RISK_STYLE[level];
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border font-bold ${RISK_STYLE[level]} ${
-        size === "md" ? "px-2.5 py-0.5 text-xs" : "px-2 py-0.5 text-[10px]"
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full font-semibold ring-1 ring-inset ${style.pill} ${
+        size === "md" ? "px-2.5 py-0.5 text-xs" : "px-2.5 py-0.5 text-[11px]"
       }`}
     >
-      RISIKO {level}
+      <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+      {RISK_META[level].label}
     </span>
   );
 }
 
 export const STATUS_STYLE: Record<ReleaseStatus, string> = {
-  Pending_PM: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-  Pending_Core: "bg-purple-500/15 text-purple-300 border-purple-500/30",
-  Pending_Interop: "bg-sky-500/15 text-sky-300 border-sky-500/30",
-  Approved: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  Perlu_Revisi: "bg-rose-500/15 text-rose-300 border-rose-500/30",
+  Pending_PM: "bg-amber-50 text-amber-800 ring-amber-200",
+  Pending_Core: "bg-violet-50 text-violet-700 ring-violet-200",
+  Pending_Interop: "bg-sky-50 text-sky-700 ring-sky-200",
+  Approved: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  Perlu_Revisi: "bg-rose-50 text-rose-700 ring-rose-200",
 };
 
 export function StatusBadge({ status }: { status: ReleaseStatus }) {
   return (
-    <span className={`inline-flex rounded-md border px-2 py-0.5 text-[11px] font-bold ${STATUS_STYLE[status]}`}>
+    <span
+      className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${STATUS_STYLE[status]}`}
+    >
       {STATUS_LABEL[status]}
     </span>
   );
 }
 
 const MR_STYLE: Record<MRStatus, { cls: string; label: string }> = {
-  DISETUJUI: { cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30", label: "Di-merge (simulasi)" },
-  MENUNGGU: { cls: "bg-amber-500/15 text-amber-300 border-amber-500/30", label: "Menunggu keputusan" },
-  DITOLAK: { cls: "bg-rose-500/15 text-rose-300 border-rose-500/30", label: "Ditolak" },
-  BELUM_DIMULAI: { cls: "bg-slate-800 text-slate-400 border-slate-700", label: "Belum dimulai" },
+  DISETUJUI: { cls: "bg-emerald-50 text-emerald-700 ring-emerald-200", label: "Disetujui & di-merge" },
+  MENUNGGU: { cls: "bg-amber-50 text-amber-800 ring-amber-200", label: "Menunggu keputusan" },
+  DITOLAK: { cls: "bg-rose-50 text-rose-700 ring-rose-200", label: "Ditolak" },
+  BELUM_DIMULAI: { cls: "bg-slate-100 text-slate-500 ring-slate-200", label: "Belum dimulai" },
 };
 
+const STAGE_SHORT = ["Ajukan", "PM", "Core", "Interop"] as const;
+
 // ---------------------------------------------------------------------------
-// Mini stepper (4 titik) & daftar MR per layer
+// 4-Stage Progress Bar (Ajukan · PM · Core · Interop) & MR List
 // ---------------------------------------------------------------------------
 
 export function MiniStepper({ release }: { release: ReleaseRequest }) {
   return (
-    <div className="flex items-center gap-1" aria-label="Posisi layer">
-      {release.mrs.map((mr, i) => {
-        const color =
+    <div className="grid w-full grid-cols-4 gap-1.5" aria-label="Posisi tahap">
+      {release.mrs.map((mr, idx) => {
+        const barColor =
           mr.status === "DISETUJUI"
-            ? "bg-emerald-400"
+            ? "bg-emerald-500"
             : mr.status === "MENUNGGU"
-            ? "bg-amber-400 ring-2 ring-amber-400/30"
+            ? "bg-amber-400"
             : mr.status === "DITOLAK"
             ? "bg-rose-500"
-            : "bg-slate-700";
+            : "bg-slate-200";
+        const textColor =
+          mr.status === "DISETUJUI"
+            ? "text-emerald-700 font-semibold"
+            : mr.status === "MENUNGGU"
+            ? "text-amber-700 font-semibold"
+            : mr.status === "DITOLAK"
+            ? "text-rose-700 font-semibold"
+            : "text-slate-400";
         return (
-          <React.Fragment key={mr.layer}>
-            <span title={`Layer ${mr.layer}: ${mr.source_branch} → ${mr.target_branch} · ${MR_STYLE[mr.status].label}`} className="flex items-center gap-1">
-              <span className={`h-2.5 w-2.5 rounded-full ${color}`} />
-              <span className="text-[9px] font-mono text-slate-500">L{mr.layer}</span>
-            </span>
-            {i < release.mrs.length - 1 && <span className="h-px w-3 bg-slate-700" />}
-          </React.Fragment>
+          <div
+            key={mr.layer}
+            title={`Tahap ${mr.layer}: ${mr.source_branch} → ${mr.target_branch} · ${MR_STYLE[mr.status].label}`}
+            className="flex flex-col gap-1"
+          >
+            <span className={`h-1.5 w-full rounded-full ${barColor}`} />
+            <span className={`text-[10px] leading-none ${textColor}`}>{STAGE_SHORT[idx] ?? `T${mr.layer}`}</span>
+          </div>
         );
       })}
     </div>
@@ -148,26 +185,26 @@ export function MiniStepper({ release }: { release: ReleaseRequest }) {
 
 export function MrLayerList({ release }: { release: ReleaseRequest }) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       {release.iterasi > 1 && (
-        <p className="text-[11px] text-amber-300">
-          Iterasi {release.iterasi} · MR baru dibuka setelah revisi (riwayat iterasi sebelumnya ada di Audit Trail).
+        <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-800 ring-1 ring-inset ring-amber-200">
+          Iterasi {release.iterasi} · MR baru dibuka setelah revisi (riwayat iterasi sebelumnya tercatat di Riwayat keputusan).
         </p>
       )}
       {release.mrs.map((mr) => {
         const owner = LAYERS[mr.layer - 1].role;
         return (
-          <div key={mr.layer} className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px]">
+          <div key={mr.layer} className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-mono text-slate-200">
-                <span className="text-slate-500">L{mr.layer}</span> {mr.source_branch} → {mr.target_branch}{" "}
-                <span className="text-amber-300/80">{mr.mr_ref}</span>
+              <span className="font-mono text-[11px] text-ink">
+                <span className="font-bold text-slate-400">Tahap {mr.layer}</span> · {mr.source_branch} → {mr.target_branch}{" "}
+                <span className="font-semibold text-brand-600">{mr.mr_ref}</span>
               </span>
-              <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${MR_STYLE[mr.status].cls}`}>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${MR_STYLE[mr.status].cls}`}>
                 {MR_STYLE[mr.status].label}
               </span>
             </div>
-            <div className="mt-0.5 flex flex-wrap gap-x-3 text-slate-500">
+            <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-slate-500">
               <span>Penanggung jawab: {ROLE_LABEL[owner]}</span>
               {mr.opened_at && <span>Dibuka {formatTime(mr.opened_at)}</span>}
               {mr.decided_at && (
@@ -185,42 +222,47 @@ export function MrLayerList({ release }: { release: ReleaseRequest }) {
 }
 
 // ---------------------------------------------------------------------------
-// P4: Penanda aturan (deterministik), ringkasan AI, pertanyaan
+// P4: Penanda risiko otomatis (deterministik), Penjelasan singkat (AI), Pertanyaan
 // ---------------------------------------------------------------------------
 
 export function RuleFlags({ release, compact = false }: { release: ReleaseRequest; compact?: boolean }) {
+  const primaryRule = release.triggered_rules[0];
   return (
-    <section className="rounded-xl border border-slate-700 bg-slate-900/80 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h4 className="flex items-center gap-1.5 text-xs font-bold text-white">
-          <ShieldAlert className="h-3.5 w-3.5 text-slate-300" />
-          Penanda Aturan (deterministik)
-        </h4>
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,27,51,0.04)]">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-bold text-ink">
+          <ShieldAlert className="h-4 w-4 text-brand-600" />
+          Penanda risiko otomatis
+        </h3>
         <RiskBadge level={release.risk_level} size="md" />
       </div>
-      <ul className="space-y-1">
-        {release.triggered_rules.map((r, i) => (
-          <li key={i} className="flex items-start gap-2 text-[11px]">
-            <span
-              className={`mt-px shrink-0 rounded px-1.5 py-px font-mono text-[10px] font-bold ${
-                r.level === "HIGH" ? "bg-rose-500/20 text-rose-300" : r.level === "MEDIUM" ? "bg-amber-500/20 text-amber-300" : "bg-emerald-500/20 text-emerald-300"
-              }`}
-            >
-              {r.id}
-            </span>
-            <span className="text-slate-300">
-              {r.file ? <span className="font-mono text-slate-200 break-all">{r.file}</span> : <span className="text-slate-200">{r.label}</span>}
-              {r.file && <span className="text-slate-400"> · {r.label}</span>}
-              {r.detail && <span className="text-slate-500"> · {r.detail}</span>}
-            </span>
-          </li>
-        ))}
-      </ul>
-      {!compact && (
-        <p className="mt-2 text-[10px] text-slate-500">
-          Dihitung rule engine dari daftar file dan pola diff. Tidak memakai AI. Level = aturan tertinggi yang terpicu.
-        </p>
-      )}
+
+      <p className="mt-2 text-xs font-medium text-ink">
+        {primaryRule ? `${primaryRule.label}.` : "Evaluasi aturan perubahan."}
+      </p>
+      <p className="mt-0.5 text-xs text-slate-500">{RISK_META[release.risk_level].hint}</p>
+
+      <div className="mt-3 space-y-2 rounded-xl bg-slate-50 p-3 ring-1 ring-inset ring-slate-200/80">
+        <ul className="space-y-1.5">
+          {release.triggered_rules.map((r, i) => (
+            <li key={i} className="flex items-start gap-2 text-xs">
+              <span className="mt-0.5 shrink-0 rounded bg-white px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-700 ring-1 ring-slate-200">
+                {r.id}
+              </span>
+              <div className="min-w-0 flex-1">
+                {r.file ? (
+                  <p className="break-all font-mono text-[11px] font-medium text-ink">{r.file}</p>
+                ) : (
+                  <p className="font-medium text-ink">{r.label}</p>
+                )}
+                {r.file && r.label && <p className="text-[11px] text-slate-500">{r.label}</p>}
+                {r.detail && <p className="text-[11px] text-slate-500">{r.detail}</p>}
+              </div>
+            </li>
+          ))}
+        </ul>
+        {!compact && <p className="text-[11px] text-slate-500">Dihitung dari aturan tetap, bukan AI.</p>}
+      </div>
     </section>
   );
 }
@@ -241,23 +283,28 @@ export function AiSummaryBlock({
   onConfigureKey?: () => void;
 }) {
   const s = release.ai_summary;
-  const sourceChip = release.ai_source === "gemini" && s ? "Gemini AI · Live" : "Belum dibuat";
+  const sourceChip = release.ai_source === "gemini" && s ? "Dibuat AI" : "Belum dibuat";
   return (
-    <section className="rounded-xl border border-indigo-500/30 bg-indigo-950/20 p-3">
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <h4 className="flex items-center gap-1.5 text-xs font-bold text-indigo-200">
-          <Bot className="h-3.5 w-3.5" />
-          Bantuan Memahami Perubahan
-        </h4>
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,27,51,0.04)]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-bold text-ink">
+          <Bot className="h-4 w-4 text-brand-600" />
+          Penjelasan singkat
+        </h3>
         <div className="flex items-center gap-1.5">
-          <span className="rounded border border-indigo-400/30 bg-indigo-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-200">
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${
+              s ? "bg-brand-50 text-brand-700 ring-brand-200" : "bg-slate-100 text-slate-600 ring-slate-200"
+            }`}
+          >
+            <Sparkles className="h-3 w-3" />
             {sourceChip}
           </span>
           {canRegenerate && onRegenerate ? (
             <button
               onClick={onRegenerate}
               disabled={regenerating}
-              className="rounded border border-indigo-400/40 bg-indigo-500/20 px-2 py-0.5 text-[10px] font-bold text-indigo-100 hover:bg-indigo-500/30 disabled:opacity-50"
+              className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
             >
               {regenerating ? "Memproses…" : s ? "Buat ulang" : "Buat Ringkasan AI"}
             </button>
@@ -265,7 +312,7 @@ export function AiSummaryBlock({
             onConfigureKey && (
               <button
                 onClick={onConfigureKey}
-                className="rounded border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-200 hover:bg-amber-500/25"
+                className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 transition hover:bg-brand-100"
               >
                 Pasang API Key
               </button>
@@ -273,39 +320,54 @@ export function AiSummaryBlock({
           )}
         </div>
       </div>
-      <p className="mb-2 text-[10px] italic text-indigo-300/80">Dibuat langsung oleh Gemini AI sebagai bantuan, dapat keliru. Verifikasi ke developer.</p>
+
+      <p className="mt-1.5 text-xs text-slate-500">
+        Ringkasan ini bantuan AI dan bisa keliru. Konfirmasikan ke developer.
+      </p>
 
       {s ? (
-        <div className="space-y-2 text-[11px] text-slate-200">
+        <div className="mt-3 space-y-3 text-xs leading-relaxed text-ink">
+          <p>{s.ringkasan}</p>
           {s.dampak_pengguna.length > 0 && (
             <div>
-              <p className="mb-0.5 font-semibold text-indigo-200">Dampak ke pengguna</p>
-              <ul className="list-disc space-y-0.5 pl-4">
+              <h4 className="mb-1 text-xs font-bold text-ink">Dampak bagi pengguna</h4>
+              <ul className="list-disc space-y-1 pl-4 text-slate-600">
                 {(compact ? s.dampak_pengguna.slice(0, 2) : s.dampak_pengguna).map((d, i) => (
                   <li key={i}>{d}</li>
                 ))}
               </ul>
             </div>
           )}
-          <p>{s.ringkasan}</p>
         </div>
       ) : (
-        <div className="rounded-lg border border-dashed border-slate-700 p-2.5 text-[11px] text-slate-400">
-          <p className="font-semibold text-slate-300">
+        <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-500">
+          <p className="font-semibold text-ink">
             {regenerating
-              ? "Sedang membuat ringkasan perubahan menggunakan Gemini AI…"
+              ? "Sedang membuat penjelasan singkat menggunakan Gemini AI…"
               : canRegenerate
-              ? "Ringkasan AI belum dibuat untuk perubahan ini."
-              : "Ringkasan AI tidak tersedia (API Key Gemini belum dipasang)."}
+              ? "Penjelasan singkat AI belum dibuat untuk rilis ini."
+              : "Penjelasan singkat AI belum tersedia (API Key Gemini belum dipasang)."}
           </p>
-          <p className="mt-0.5">Penanda aturan dan tombol keputusan tetap berfungsi. Baca diff atau tanyakan langsung ke developer.</p>
-          {canRegenerate && onRegenerate && !regenerating && (
+          <p className="mt-0.5">
+            Penanda risiko otomatis dan tombol keputusan tetap berfungsi. Anda dapat membuat penjelasan langsung dengan Gemini AI.
+          </p>
+          {canRegenerate && onRegenerate && !regenerating ? (
             <button
               onClick={onRegenerate}
-              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-400"
+              className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-brand-700"
             >
-              <Bot className="h-3.5 w-3.5" /> Buat Ringkasan dengan Gemini AI
+              <Sparkles className="h-3.5 w-3.5" /> Buat Ringkasan dengan Gemini AI
             </button>
+          ) : (
+            onConfigureKey &&
+            !regenerating && (
+              <button
+                onClick={onConfigureKey}
+                className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink shadow-sm transition hover:bg-slate-50"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-amber-500" /> Pasang API Key Gemini
+              </button>
+            )
           )}
         </div>
       )}
@@ -318,22 +380,26 @@ export function DeveloperQuestions({ release }: { release: ReleaseRequest }) {
   const aiQs = release.ai_summary?.pertanyaan_untuk_developer ?? [];
   if (ruleQs.length === 0 && aiQs.length === 0) return null;
   return (
-    <section className="rounded-xl border border-slate-700 bg-slate-900/60 p-3">
-      <h4 className="mb-2 flex items-center gap-1.5 text-xs font-bold text-white">
-        <HelpCircle className="h-3.5 w-3.5 text-slate-300" />
-        Pertanyaan untuk developer
-      </h4>
-      <ul className="space-y-1 text-[11px]">
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,27,51,0.04)]">
+      <h3 className="mb-2.5 flex items-center gap-2 text-sm font-bold text-ink">
+        <HelpCircle className="h-4 w-4 text-brand-600" />
+        Tanyakan ke developer
+      </h3>
+      <ul className="space-y-2 text-xs">
         {ruleQs.map((q) => (
-          <li key={q.rule} className="flex gap-2">
-            <span className="shrink-0 rounded bg-slate-800 px-1.5 py-px font-mono text-[10px] font-bold text-slate-300">{q.rule}</span>
-            <span className="text-slate-200">{q.question}</span>
+          <li key={q.rule} className="flex items-start gap-2">
+            <span className="mt-0.5 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-700 ring-1 ring-inset ring-slate-200">
+              {q.rule}
+            </span>
+            <span className="text-slate-700">{q.question}</span>
           </li>
         ))}
         {aiQs.map((q, i) => (
-          <li key={`ai-${i}`} className="flex gap-2">
-            <span className="shrink-0 rounded bg-indigo-500/20 px-1.5 py-px font-mono text-[10px] font-bold text-indigo-200">AI</span>
-            <span className="text-slate-200">{q}</span>
+          <li key={`ai-${i}`} className="flex items-start gap-2">
+            <span className="mt-0.5 shrink-0 rounded bg-brand-50 px-1.5 py-0.5 font-mono text-[10px] font-bold text-brand-700 ring-1 ring-inset ring-brand-200">
+              AI
+            </span>
+            <span className="text-slate-700">{q}</span>
           </li>
         ))}
       </ul>
@@ -343,24 +409,26 @@ export function DeveloperQuestions({ release }: { release: ReleaseRequest }) {
 
 export function RollbackPlan({ release }: { release: ReleaseRequest }) {
   return (
-    <section className="rounded-xl border border-slate-800 bg-slate-950/50 p-3 text-[11px]">
-      <div className="mb-0.5 flex items-center justify-between">
-        <h4 className="flex items-center gap-1.5 font-bold text-white">
-          <RotateCcw className="h-3.5 w-3.5 text-slate-300" /> Rencana rollback
-        </h4>
-        <span className="rounded bg-slate-800 px-1.5 py-px text-[10px] text-slate-400">Diisi developer</span>
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,27,51,0.04)]">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-bold text-ink">
+          <RotateCcw className="h-4 w-4 text-brand-600" /> Rencana pembatalan
+        </h3>
+        <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600 ring-1 ring-inset ring-slate-200">
+          Diisi developer
+        </span>
       </div>
       {release.rollback_plan ? (
-        <p className="text-slate-300">{release.rollback_plan}</p>
+        <p className="text-xs leading-relaxed text-slate-600">{release.rollback_plan}</p>
       ) : (
-        <p className="text-amber-300">Belum diisi developer.</p>
+        <p className="text-xs font-medium text-amber-700">Belum diisi developer.</p>
       )}
     </section>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Panel keputusan untuk kedua mode simulasi
+// Panel Keputusan (Keputusan tahap X / Perlu diperbaiki developer / Keputusan)
 // ---------------------------------------------------------------------------
 
 export interface DecisionError {
@@ -388,31 +456,43 @@ export function DecisionPanel({
   onSelfApproveTest: () => void;
 }) {
   const [note, setNote] = useState("");
+  const [rejectOpen, setRejectOpen] = useState(false);
   const noteId = useId();
-  useEffect(() => setNote(""), [release.id, release.status, user?.id]);
 
+  useEffect(() => {
+    setNote("");
+    setRejectOpen(false);
+  }, [release.id, release.status, user?.id]);
+
+  const currentLayer = LAYER_BY_STATUS[release.status];
   const requiredRole = REQUIRED_ROLE_BY_STATUS[release.status];
   const permission = canDecide(release, user);
   const isAuthor = user?.id === release.author_id;
   const err = decisionError?.releaseId === release.id ? decisionError : null;
 
   const errorBox = err && (
-    <div role="alert" className="rounded-lg border border-rose-500/50 bg-rose-950/40 p-2.5 text-[11px] text-rose-100">
-      <p className="flex items-center gap-1.5 font-bold">
-        <XCircle className="h-3.5 w-3.5 text-rose-400" /> {err.title}
+    <div role="alert" className="mt-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+      <p className="flex items-center gap-1.5 font-bold text-rose-900">
+        <XCircle className="h-4 w-4 text-rose-600" /> {err.title}
       </p>
       <p className="mt-0.5">{err.error}</p>
-      {err.logged && <p className="mt-1 text-[10px] text-rose-300/80">Percobaan ini dicatat di Audit Trail sebagai DITOLAK_SISTEM.</p>}
+      {err.logged && (
+        <p className="mt-1 text-[11px] font-medium text-rose-700">
+          Percobaan ini dicatat di Riwayat keputusan sebagai DITOLAK_SISTEM.
+        </p>
+      )}
     </div>
   );
 
   if (release.status === "Approved") {
     return (
-      <section className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3 text-[11px] text-emerald-100">
-        <p className="flex items-center gap-1.5 font-bold">
-          <CheckCircle2 className="h-4 w-4 text-emerald-400" /> Dirilis (simulasi)
+      <section className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 shadow-[0_1px_2px_rgba(15,27,51,0.04)]">
+        <h3 className="flex items-center gap-2 text-sm font-bold text-emerald-900">
+          <CheckCircle2 className="h-4 w-4 text-emerald-600" /> Keputusan
+        </h3>
+        <p className="mt-1 text-xs text-emerald-800">
+          Sudah disetujui di semua tahap pada {formatTime(release.updated_at)}. Tidak ada tindakan lagi.
         </p>
-        <p className="mt-0.5 text-emerald-200/80">Keempat layer disetujui. Otoritas akhir: Tim Interoperability.</p>
       </section>
     );
   }
@@ -420,107 +500,188 @@ export function DecisionPanel({
   if (release.status === "Perlu_Revisi") {
     const reject = lastRejectLog(release);
     return (
-      <section className="space-y-2 rounded-xl border border-rose-500/30 bg-rose-950/15 p-3 text-[11px]">
-        <p className="flex items-center gap-1.5 font-bold text-rose-200">
-          <AlertTriangle className="h-4 w-4 text-rose-400" /> Perlu revisi
+      <section className="space-y-3 rounded-2xl border border-rose-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,27,51,0.04)]">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="flex items-center gap-2 text-sm font-bold text-ink">
+            <Undo2 className="h-4 w-4 text-rose-600" /> Perlu diperbaiki developer
+          </h3>
+          <span className="text-xs text-slate-500">Penanggung jawab: Developer</span>
+        </div>
+
+        <p className="text-xs text-slate-600">
+          Perubahan ini ditolak di tahap {reject?.layer ?? "?"}. Developer memperbaiki, lalu mengajukan ulang dari awal.
         </p>
+
         {reject && (
-          <p className="text-slate-300">
-            Ditolak oleh <strong>{reject.user_name}</strong> ({ROLE_LABEL[reject.role_at_action]}) di layer {reject.layer}: “{reject.comment}”
-          </p>
+          <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-2.5 text-xs text-rose-900">
+            <span className="font-semibold">{reject.user_name}</span> ({ROLE_LABEL[reject.role_at_action]}): “{reject.comment}”
+          </div>
         )}
+
         {isAuthor ? (
-          <>
+          <div className="space-y-2">
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
               rows={2}
-              placeholder="Apa yang diperbaiki? (opsional)"
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-[11px] text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none"
+              placeholder="Catatan perbaikan untuk Project Manager (opsional)…"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs text-ink placeholder:text-slate-400 focus:border-brand-600 focus:bg-white focus:outline-none"
             />
             <button
               disabled={busy}
               onClick={() => onResubmit(note)}
-              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-500 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-50"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand-600 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-50"
             >
-              <RotateCcw className="h-3.5 w-3.5" /> Kirim ulang setelah revisi
+              <Undo2 className="h-4 w-4" /> Ajukan ulang
             </button>
-            <p className="text-[10px] text-slate-500">Asumsi sementara: setelah dikirim ulang, request kembali ke PM (menunggu konfirmasi wawancara).</p>
-          </>
+          </div>
         ) : (
-          <p className="flex items-center gap-1.5 text-slate-400">
-            <Lock className="h-3.5 w-3.5" /> Menunggu developer pengaju merevisi dan mengirim ulang.
-          </p>
+          <div className="space-y-2">
+            <button
+              disabled
+              className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-slate-100 py-2.5 text-xs font-semibold text-slate-400"
+            >
+              <Undo2 className="h-4 w-4" /> Ajukan ulang
+            </button>
+            <p className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Lock className="h-3.5 w-3.5 shrink-0 text-slate-400" /> Hanya Developer yang dapat mengajukan ulang.
+            </p>
+          </div>
         )}
         {errorBox}
       </section>
     );
   }
 
-  const noteRequired = release.risk_level === "HIGH";
+  const noteRequiredForApprove = release.risk_level === "HIGH";
+  const defaultNoteForLayer = currentLayer ? SEED_APPROVAL_NOTES[currentLayer] : "";
+
   return (
-    <section className="space-y-2 rounded-xl border border-slate-700 bg-slate-900/80 p-3">
-      <div className="flex items-center justify-between text-[11px]">
-        <span className="font-bold text-white">Keputusan layer {LAYER_BY_STATUS[release.status]}</span>
-        <span className="text-slate-400">Penanggung jawab: {requiredRole ? ROLE_LABEL[requiredRole] : "-"}</span>
+    <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,27,51,0.04)]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-bold text-ink">
+          <Check className="h-4 w-4 text-brand-600" /> Keputusan tahap {currentLayer}
+        </h3>
+        <span className="text-xs text-slate-500">
+          Penanggung jawab: {requiredRole ? ROLE_LABEL[requiredRole] : "-"}
+        </span>
       </div>
 
-      {permission.allowed && (
+      {permission.allowed ? (
+        rejectOpen ? (
+          <div className="space-y-2.5">
+            <label htmlFor={noteId} className="block text-xs font-semibold text-ink">
+              Alasan penolakan (wajib, akan dibaca developer)
+            </label>
+            <textarea
+              id={noteId}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={3}
+              placeholder="Contoh: Mohon jelaskan rencana rollback sebelum diajukan ulang."
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs text-ink placeholder:text-slate-400 focus:border-brand-600 focus:bg-white focus:outline-none"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setRejectOpen(false);
+                  setNote("");
+                }}
+                className="rounded-xl border border-slate-200 bg-white py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={busy || note.trim().length < MIN_NOTE_LENGTH}
+                onClick={() => onDecide("REJECT", note)}
+                className="rounded-xl bg-rose-600 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+              >
+                Kirim penolakan
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {noteRequiredForApprove && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label htmlFor={noteId} className="block text-xs font-semibold text-ink">
+                    Catatan verifikasi (wajib untuk risiko tinggi)
+                  </label>
+                  {defaultNoteForLayer && (
+                    <button
+                      type="button"
+                      onClick={() => setNote(defaultNoteForLayer)}
+                      className="text-[11px] font-semibold text-brand-600 hover:text-brand-700"
+                    >
+                      Isi catatan standar
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  id={noteId}
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  rows={2}
+                  placeholder="Bukti apa yang sudah Anda periksa sebelum menyetujui rilis risiko tinggi ini?"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs text-ink placeholder:text-slate-400 focus:border-brand-600 focus:bg-white focus:outline-none"
+                />
+                <p className="text-[11px] text-slate-500">
+                  Risiko tinggi wajib menyertakan catatan verifikasi minimal {MIN_NOTE_LENGTH} karakter.
+                </p>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                disabled={busy}
+                onClick={() => onDecide("APPROVE", note)}
+                className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-brand-600 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Check className="h-4 w-4" /> Setujui
+              </button>
+              <button
+                disabled={busy}
+                onClick={() => setRejectOpen(true)}
+                className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-white py-2.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ThumbsDown className="h-3.5 w-3.5" /> Tolak
+              </button>
+            </div>
+          </>
+        )
+      ) : (
         <>
-          <label htmlFor={noteId} className="block text-[11px] font-semibold text-slate-200">
-            {noteRequired ? "Dasar keputusan untuk risiko HIGH" : "Catatan keputusan"}
-          </label>
-          <textarea
-            id={noteId}
-            aria-describedby={`${noteId}-help`}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            rows={3}
-            placeholder={noteRequired ? "Bukti apa yang sudah Anda periksa? Apa yang masih perlu dijawab?" : "Apa yang sudah diperiksa atau perlu diperbaiki?"}
-            className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-sm text-white placeholder:text-slate-400 focus:border-amber-400 focus:outline-none"
-          />
-          <p id={`${noteId}-help`} className="text-[11px] text-slate-400">
-            {noteRequired
-              ? `Tulis bukti yang diperiksa saat menyetujui, atau hal yang perlu diperbaiki saat meminta revisi. Minimal ${MIN_NOTE_LENGTH} karakter.`
-              : `Permintaan revisi wajib berisi alasan, minimal ${MIN_NOTE_LENGTH} karakter.`}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              disabled
+              className="flex w-full cursor-not-allowed items-center justify-center gap-1.5 rounded-xl bg-slate-100 py-2.5 text-xs font-semibold text-slate-400"
+            >
+              <Check className="h-4 w-4" /> Setujui
+            </button>
+            <button
+              disabled
+              className="flex w-full cursor-not-allowed items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 py-2.5 text-xs font-semibold text-slate-400"
+            >
+              <ThumbsDown className="h-3.5 w-3.5" /> Tolak
+            </button>
+          </div>
+          <p className="flex items-center gap-1.5 text-xs text-slate-500">
+            <Lock className="h-3.5 w-3.5 shrink-0 text-slate-400" /> {permission.reason}
           </p>
         </>
-      )}
-
-      <div className="grid grid-cols-2 gap-2">
-        <span title={permission.allowed ? "" : permission.reason} className="block">
-          <button
-            disabled={!permission.allowed || busy}
-            onClick={() => onDecide("APPROVE", note)}
-            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-500 py-2 text-xs font-bold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-35"
-          >
-            <ThumbsUp className="h-3.5 w-3.5" /> Setujui
-          </button>
-        </span>
-        <span title={permission.allowed ? "" : permission.reason} className="block">
-          <button
-            disabled={!permission.allowed || busy}
-            onClick={() => onDecide("REJECT", note)}
-            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/15 py-2 text-xs font-bold text-rose-200 hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-35"
-          >
-            <ThumbsDown className="h-3.5 w-3.5" /> Minta revisi
-          </button>
-        </span>
-      </div>
-
-      {!permission.allowed && (
-        <p className="flex items-center gap-1.5 text-[11px] text-slate-400">
-          <Lock className="h-3.5 w-3.5 shrink-0" /> {permission.reason}
-        </p>
       )}
 
       {isAuthor && (
         <button
           disabled={busy}
           onClick={onSelfApproveTest}
-          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-amber-400/50 bg-amber-500/5 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-500/10"
+          className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-amber-300 bg-amber-50/70 py-2 text-xs font-semibold text-amber-900 transition hover:bg-amber-100/70"
         >
-          <FlaskConical className="h-3.5 w-3.5" /> Uji persetujuan request sendiri
+          <FlaskConical className="h-3.5 w-3.5 text-amber-600" /> Uji persetujuan rilis sendiri (uji blokir server)
         </button>
       )}
 
@@ -529,20 +690,26 @@ export function DecisionPanel({
   );
 }
 
+export const LOG_ACTION_META: Record<string, { label: string; cls: string }> = {
+  SUBMIT: { label: "Mengajukan", cls: "bg-sky-50 text-sky-700 ring-sky-200" },
+  APPROVE: { label: "Menyetujui", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
+  REJECT: { label: "Menolak", cls: "bg-rose-50 text-rose-700 ring-rose-200" },
+  RESUBMIT: { label: "Mengajukan ulang", cls: "bg-amber-50 text-amber-800 ring-amber-200" },
+  BLOCKED: { label: "Ditolak sistem", cls: "bg-rose-100 text-rose-800 ring-rose-300" },
+};
+
 export function LogActionChip({ log }: { log: ApprovalLog }) {
-  const map: Record<string, string> = {
-    SUBMIT: "bg-sky-500/15 text-sky-300",
-    APPROVE: "bg-emerald-500/15 text-emerald-300",
-    REJECT: "bg-rose-500/15 text-rose-300",
-    RESUBMIT: "bg-amber-500/15 text-amber-300",
-    BLOCKED: "bg-rose-600/30 text-rose-200",
-  };
-  return <span className={`rounded px-1.5 py-px font-mono text-[10px] font-bold ${map[log.action]}`}>{log.action}</span>;
+  const meta = LOG_ACTION_META[log.action] ?? { label: log.action, cls: "bg-slate-100 text-slate-700 ring-slate-200" };
+  return (
+    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ${meta.cls}`}>
+      {meta.label}
+    </span>
+  );
 }
 
 export function EmptyColumn({ label }: { label: string }) {
   return (
-    <div className="flex h-24 flex-col items-center justify-center rounded-lg border border-dashed border-slate-800 text-[11px] text-slate-600">
+    <div className="flex h-24 flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/50 text-xs text-slate-400">
       <CircleDashed className="mb-1 h-4 w-4" />
       {label}
     </div>

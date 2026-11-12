@@ -13,10 +13,46 @@ import { ReleaseRequest, ReleaseStatus, RiskLevel, User, UserRole } from "./type
 export const MIN_NOTE_LENGTH = 10;
 
 export const LAYERS = [
-  { layer: 1, source: "feature/*", target: "develop", role: "DEVELOPER" as UserRole, status: null },
-  { layer: 2, source: "develop", target: "staging", role: "PM" as UserRole, status: "Pending_PM" as ReleaseStatus },
-  { layer: 3, source: "staging", target: "master", role: "CORE" as UserRole, status: "Pending_Core" as ReleaseStatus },
-  { layer: 4, source: "master", target: "release/production", role: "INTEROP" as UserRole, status: "Pending_Interop" as ReleaseStatus },
+  {
+    layer: 1,
+    source: "feature/*",
+    target: "develop",
+    role: "DEVELOPER" as UserRole,
+    status: null,
+    title: "Developer mengajukan",
+    short: "Ajukan",
+    plain: "Developer menyelesaikan perubahan dan mengajukannya untuk ditinjau.",
+  },
+  {
+    layer: 2,
+    source: "develop",
+    target: "staging",
+    role: "PM" as UserRole,
+    status: "Pending_PM" as ReleaseStatus,
+    title: "Project Manager meninjau",
+    short: "PM",
+    plain: "Memastikan perubahan sesuai prioritas dan kebutuhan pengguna.",
+  },
+  {
+    layer: 3,
+    source: "staging",
+    target: "master",
+    role: "CORE" as UserRole,
+    status: "Pending_Core" as ReleaseStatus,
+    title: "Tim Core memeriksa teknis",
+    short: "Core",
+    plain: "Memeriksa arsitektur, database, dan rencana pembatalan.",
+  },
+  {
+    layer: 4,
+    source: "master",
+    target: "release/production",
+    role: "INTEROP" as UserRole,
+    status: "Pending_Interop" as ReleaseStatus,
+    title: "Tim Interoperability merilis",
+    short: "Interop",
+    plain: "Memastikan koneksi dengan sistem lain aman, lalu merilis.",
+  },
 ] as const;
 
 export const ROLE_LABEL: Record<UserRole, string> = {
@@ -27,11 +63,34 @@ export const ROLE_LABEL: Record<UserRole, string> = {
 };
 
 export const STATUS_LABEL: Record<ReleaseStatus, string> = {
-  Pending_PM: "Menunggu PM",
+  Pending_PM: "Menunggu Project Manager",
   Pending_Core: "Menunggu Tim Core",
-  Pending_Interop: "Menunggu Tim Interop",
+  Pending_Interop: "Menunggu Tim Interoperability",
   Approved: "Dirilis (simulasi)",
-  Perlu_Revisi: "Perlu Revisi",
+  Perlu_Revisi: "Perlu revisi",
+};
+
+export const STATUS_HINT: Record<ReleaseStatus, string> = {
+  Pending_PM: "Menunggu keputusan Project Manager",
+  Pending_Core: "Menunggu pemeriksaan Tim Core",
+  Pending_Interop: "Menunggu persetujuan akhir Tim Interoperability",
+  Perlu_Revisi: "Dikembalikan ke developer",
+  Approved: "Sudah melewati semua tahap",
+};
+
+export const RISK_META: Record<RiskLevel, { label: string; hint: string }> = {
+  HIGH: {
+    label: "Risiko tinggi",
+    hint: "Menyentuh data atau pembayaran. Periksa dengan teliti.",
+  },
+  MEDIUM: {
+    label: "Risiko sedang",
+    hint: "Mengubah fitur yang dipakai banyak pengguna.",
+  },
+  LOW: {
+    label: "Risiko rendah",
+    hint: "Perubahan kecil dan terbatas.",
+  },
 };
 
 /** Layer yang sedang menunggu keputusan untuk status tertentu. */

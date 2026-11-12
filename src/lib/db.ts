@@ -176,7 +176,7 @@ export function seedDemoData(db: DatabaseSync) {
   db.exec("DELETE FROM sqlite_sequence;");
 
   const insertUser = db.prepare("INSERT INTO users (name, email, role, title, avatar) VALUES (?, ?, ?, ?, ?)");
-  insertUser.run("Helmy (Developer)", "helmy.dev@uii.ac.id", "DEVELOPER", "Full-Stack Engineer · Tim Aplikasi", "HD");
+  insertUser.run("Helmy", "helmy.dev@uii.ac.id", "DEVELOPER", "Full-Stack Engineer · Tim Aplikasi", "HD");
   insertUser.run("Nadia Putri", "nadia.pm@uii.ac.id", "PM", "Project Manager", "NP");
   insertUser.run("Dimas Prakoso", "dimas.core@uii.ac.id", "CORE", "Tim Core · Arsitektur & Database", "DP");
   insertUser.run("Rizky Pratama", "rizky.interop@uii.ac.id", "INTEROP", "Tim Interoperability · API Gateway", "RP");

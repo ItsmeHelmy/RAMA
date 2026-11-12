@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "RAMA — Review & Pelacakan Rilis BSI UII",
+  title: "RAMA — Pantau & Setujui Rilis Aplikasi Berjenjang di BSI UII",
   description:
-    "Simulasi rilis berjenjang BSI UII dengan pelacakan PIC, penanda risiko, bantuan memahami perubahan, dan jejak keputusan.",
+    "Pantau dan setujui rilis aplikasi secara berjenjang di BSI UII dengan penanda risiko otomatis, penjelasan singkat AI, dan riwayat keputusan.",
 };
 
 export default function RootLayout({
@@ -13,8 +13,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="id" className="dark">
-      <body className="min-h-screen bg-[#060d1a] text-slate-100 antialiased selection:bg-amber-500/30 selection:text-amber-200">
+    <html lang="id">
+      <head>
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+        />
+      </head>
+      <body className="min-h-screen bg-[#f8fafc] font-sans text-ink antialiased selection:bg-brand-100 selection:text-brand-700">
         {children}
       </body>
     </html>

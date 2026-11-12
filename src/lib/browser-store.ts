@@ -12,7 +12,7 @@ import { SCENARIO_PRESETS, SEED_APPROVAL_NOTES, SEED_RELEASES } from "./mock-sce
 import { LAYER_BY_STATUS, LAYERS, validateDecision, validateResubmit } from "./workflow";
 import { ApprovalLog, ReleaseMR, ReleaseRequest, User } from "./types";
 
-const STORAGE_KEY = "RAMA_CF_SIM_STATE_V2";
+const STORAGE_KEY = "RAMA_CF_SIM_STATE_V3";
 const BLOCKED_STATUS = "DITOLAK_SISTEM";
 
 interface SimState {
@@ -23,7 +23,7 @@ interface SimState {
 }
 
 const DEFAULT_USERS: User[] = [
-  { id: 1, name: "Helmy (Developer)", email: "helmy.dev@uii.ac.id", role: "DEVELOPER", title: "Full-Stack Engineer · Tim Aplikasi", avatar: "HD" },
+  { id: 1, name: "Helmy", email: "helmy.dev@uii.ac.id", role: "DEVELOPER", title: "Full-Stack Engineer · Tim Aplikasi", avatar: "HD" },
   { id: 2, name: "Nadia Putri", email: "nadia.pm@uii.ac.id", role: "PM", title: "Project Manager", avatar: "NP" },
   { id: 3, name: "Dimas Prakoso", email: "dimas.core@uii.ac.id", role: "CORE", title: "Tim Core · Arsitektur & Database", avatar: "DP" },
   { id: 4, name: "Rizky Pratama", email: "rizky.interop@uii.ac.id", role: "INTEROP", title: "Tim Interoperability · API Gateway", avatar: "RP" },
