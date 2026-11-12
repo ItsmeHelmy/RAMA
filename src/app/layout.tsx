@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "RAMA Dashboard — BSI UII Release Orchestration & AI Approval Engine",
+  title: "RAMA — Review & Pelacakan Rilis BSI UII",
   description:
-    "Request, Align, Monitor, Approve: Middleware & Workflow Engine cerdas berbasis Gemini AI untuk mencegah Blind Approval pada deployment berjenjang di BSI UII.",
+    "Simulasi rilis berjenjang BSI UII dengan pelacakan PIC, penanda risiko, bantuan memahami perubahan, dan jejak keputusan.",
 };
 
 export default function RootLayout({

@@ -6,6 +6,7 @@ const isStaticExport =
 
 const nextConfig = {
   reactStrictMode: true,
+  env: { NEXT_PUBLIC_RAMA_STATIC: isStaticExport ? "1" : "0" },
   ...(isStaticExport
     ? {
         output: "export",

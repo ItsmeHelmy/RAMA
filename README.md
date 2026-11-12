@@ -23,14 +23,15 @@ Setiap rilis dimodelkan sebagai **Release Request** (`REL-2026-xxx`) yang menaun
 ### 2. P1 — Penegakan Wewenang Ketat per Role ([`workflow.ts`](src/lib/workflow.ts), [`release-service.ts`](src/lib/release-service.ts))
 - **Tanpa jalan pintas di UI**: Checkbox *"Auto-Switch Role"* dan tombol *"Pindah ke role X"* pada kartu telah dihapus. Kartu menampilkan status *read-only* seperti `Menunggu: Tim Core · 4 jam 12 mnt`.
 - **Pergantian pengguna eksplisit**: Header memiliki switcher **`Mode Demo: masuk sebagai…`** dan badge permanen **`Mode Simulasi · data contoh`**.
-- **Penegakan di Backend (HTTP 403 / 422)**:
+- **Validasi keputusan** melalui aturan yang sama di API Node.js dan simulasi browser:
   - Role aktor wajib sesuai dengan layer saat ini (`Pending_PM` ➔ `PM`, `Pending_Core` ➔ `CORE`, `Pending_Interop` ➔ `INTEROP`).
   - Pengaju (*author*) tidak boleh menyetujui request miliknya sendiri (*separation of duties*).
   - Tidak boleh melompat layer.
   - **Reject** wajib menyertakan alasan (minimal 10 karakter) dan mengubah status menjadi **`Perlu_Revisi`**.
   - **Approve pada risiko `HIGH`** wajib menyertakan catatan (minimal 10 karakter).
-  - Setiap percobaan ilegal ditolak dengan **HTTP 403/422** dan dicatat di `approval_logs` dengan `to_status = DITOLAK_SISTEM`.
-- **Demo Negatif**: Saat masuk sebagai Developer, tersedia tombol **"Coba approve request milik sendiri"** yang memanggil endpoint API sungguhan dan menampilkan penolakan `HTTP 403` dari server beserta log `DITOLAK_SISTEM`.
+  - Percobaan yang gagal validasi dicatat sebagai `DITOLAK_SISTEM` di Audit Trail.
+- **Uji persetujuan request sendiri**. Developer dapat mencoba menyetujui request miliknya. Status tetap di tahap semula dan Audit Trail mencatat penolakan. Hosting statis menjalankan validasi di browser, menyimpan data di perangkat itu, dan menampilkan **kode simulasi 403**. Mode Node.js mengembalikan **HTTP 403** dari API demo dan menyimpan log di SQLite. Kedua mode memakai persona yang dapat dipilih untuk latihan demo.
+- **Tampilan approver** menempatkan dampak, penanda aturan, pertanyaan, dan rencana rollback sebelum tombol keputusan. Untuk rilis `HIGH`, approver diminta mencatat bukti yang diperiksa atau hal yang perlu diperbaiki.
 
 ### 3. P4 — Pemisahan Penanda Aturan Deterministik & Ringkasan AI ([`risk-engine.ts`](src/lib/risk-engine.ts), [`ai-summary.ts`](src/lib/ai-summary.ts))
 - **Rule Engine Deterministik (`evaluateRisk`)**:
@@ -52,20 +53,20 @@ Setiap rilis dimodelkan sebagai **Release Request** (`REL-2026-xxx`) yang menaun
 ## 🛠️ Cara Menjalankan di Terminal Anda
 
 ```bash
-cd "/Users/itsmehelmy/Documents/Helmy-BSI/Personal/Hackathon BSI - RAMA"
 nvm use 22
+npm ci
 npm run dev
 ```
 
-Lalu buka **http://localhost:3000**.
+Lalu buka **http://localhost:3000** untuk simulasi dengan API dan SQLite. Untuk membuat demo statis, jalankan `npm run cf:build` dan sajikan folder `out/`.
 
 ---
 
 ## 🎬 Skenario Uji Akhir & Latihan Demo (6 Langkah)
 
-1. Klik **Reset demo**, masuk sebagai **Helmy (Developer)** di bar atas, lalu klik **Simulasi MR dari GitLab**. Pilih skenario *Pelunasan SPP via QRIS + migrasi indeks* (atau *Uji prompt injection*) dan klik **Buat Release Request**. Terbentuk `REL-2026-042` dengan MR L1 `Di-merge (simulasi)`, MR L2 `Menunggu keputusan`, status `Pending_PM`, dan risiko `HIGH` karena `R1 · migrations/2026_11_add_settlement_index.sql`.
-2. Masih sebagai **Developer**, klik tombol **Coba approve request milik sendiri**. Server menolak dengan **HTTP 403** dan mencatat percobaan tersebut di `approval_logs` sebagai `DITOLAK_SISTEM`.
-3. Masuk sebagai **Nadia Putri (Project Manager)**. Perhatikan panel **Penanda Aturan (deterministik)** terpisah dari **Bantuan Memahami Perubahan**. Klik **Approve** tanpa catatan ➔ ditolak server (`HTTP 422`). Isi catatan (≥ 10 karakter) lalu klik **Approve** ➔ MR L2 menjadi `Di-merge (simulasi)`, MR L3 dibuka `Menunggu keputusan`, status naik ke `Pending_Core`.
-4. Masuk sebagai **Dimas Prakoso (Tim Core)**, isi alasan penolakan, lalu klik **Reject** ➔ status menjadi `Perlu_Revisi` dan MR L3 berstatus `Ditolak`.
-5. Masuk kembali sebagai **Helmy (Developer)** dan klik **Kirim ulang setelah revisi** ➔ iterasi baru dibuat dan request kembali ke `Pending_PM`.
-6. Buka tab **Audit Trail** untuk melihat seluruh riwayat keputusan dan percobaan yang ditolak sistem (`DITOLAK_SISTEM`) beserta kolom layer, pelaku, catatan, dan sumber `simulasi`.
+1. Klik **Reset demo**, masuk sebagai **Helmy (Developer)**, dan buka `REL-2026-041`. Tunjukkan bahwa MR L1 sudah di-merge dalam simulasi, MR L2 sedang menunggu PM, dan risiko `HIGH` terhubung ke `R1` serta file migrasi.
+2. Klik **Uji persetujuan request sendiri**. Periksa kode simulasi `403` di hosting statis atau `HTTP 403` di mode Node.js. Request tetap **Menunggu PM**.
+3. Masuk sebagai **Nadia Putri (Project Manager)** dan buka **Tampilan Approver (Mobile)**. Periksa dampak bagi mahasiswa, penanda migrasi, pertanyaan untuk developer, dan rollback sebelum memutuskan. Klik **Setujui** tanpa catatan untuk menguji validasi `422`.
+4. Isi alasan “Mohon lampirkan hasil uji pemulihan event SIAKAD dan jelaskan cara rekonsiliasi pembayaran QRIS jika kolom `rrn_reference` dihapus saat rollback.” Klik **Minta revisi** dan periksa status **Perlu Revisi**.
+5. Masuk kembali sebagai **Helmy (Developer)**. Tunjukkan alasan revisi yang diterima. Untuk latihan alur lengkap, isi catatan revisi dan klik **Kirim ulang setelah revisi**. Request kembali ke PM dalam iterasi baru.
+6. Buka **Audit Trail**. Tunjukkan percobaan `DITOLAK_SISTEM`, permintaan revisi, aktor, tahap, dan catatan. Untuk pitch singkat, cukup tampilkan langkah 1–2, keputusan revisi pada langkah 4, lalu jejaknya di Audit Trail.

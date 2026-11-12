@@ -30,6 +30,7 @@ import {
 } from "@/lib/browser-store";
 import {
   AiSummaryBlock,
+  DecisionError,
   DecisionPanel,
   DeveloperQuestions,
   EmptyColumn,
@@ -39,7 +40,6 @@ import {
   RiskBadge,
   RollbackPlan,
   RuleFlags,
-  ServerError,
   StatusBadge,
   formatTime,
   useNow,
@@ -61,8 +61,45 @@ interface PresetOption {
 const PIPELINE_COLUMNS: ReleaseStatus[] = ["Pending_PM", "Pending_Core", "Pending_Interop", "Approved"];
 const ACTIVE_USER_KEY = "RAMA_ACTIVE_USER_ID";
 const API_KEY_STORAGE = "RAMA_GEMINI_API_KEY";
+const IS_BROWSER_DEMO = process.env.NEXT_PUBLIC_RAMA_STATIC === "1";
 
 type Toast = { title: string; detail?: string; tone: "success" | "error" | "info" };
+
+async function fetchDashboard(): Promise<ReturnType<typeof browserGetDashboard>> {
+  const res = await fetch("/api/releases", { cache: "no-store" });
+  if (!res.ok) throw new Error(`API demo mengembalikan HTTP ${res.status}`);
+  return res.json();
+}
+
+async function postDemo(url: string, body: Record<string, unknown>): Promise<{ status: number | null; data: Record<string, any> }> {
+  if (!IS_BROWSER_DEMO) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      return { status: res.status, data };
+    } catch {
+      return { status: null, data: { error: "Respons dari API demo tidak tersedia. Muat ulang untuk memeriksa status terbaru." } };
+    }
+  }
+
+  if (url === "/api/demo/reset") return { status: 200, data: browserResetDemo() };
+  if (url === "/api/releases") return browserCreateRelease(body);
+  const match = url.match(/^\/api\/releases\/(\d+)\/(decision|resubmit|summary)$/);
+  if (!match) return { status: 404, data: { error: "Aksi simulasi tidak ditemukan." } };
+  const id = Number(match[1]);
+  if (match[2] === "decision") return browserDecide(id, body);
+  if (match[2] === "resubmit") return browserResubmit(id, body);
+  return browserRegenerateSummary(id, body);
+}
+
+function failureTitle(status: number | null) {
+  if (status === null) return "API demo tidak tersedia";
+  return IS_BROWSER_DEMO ? `Ditolak oleh aturan demo · kode simulasi ${status}` : `API demo menolak · HTTP ${status}`;
+}
 
 export default function RamaPage() {
   const now = useNow();
@@ -72,12 +109,13 @@ export default function RamaPage() {
   const [presets, setPresets] = useState<PresetOption[]>([]);
   const [serverHasKey, setServerHasKey] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   const [activeUserId, setActiveUserId] = useState<number>(2);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [tab, setTab] = useState<"pipeline" | "mobile" | "audit">("pipeline");
   const [busy, setBusy] = useState(false);
-  const [serverError, setServerError] = useState<ServerError | null>(null);
+  const [decisionError, setDecisionError] = useState<DecisionError | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [regenerating, setRegenerating] = useState(false);
 
@@ -96,72 +134,49 @@ export default function RamaPage() {
   }, []);
 
   const load = useCallback(async () => {
-    let data: ReturnType<typeof browserGetDashboard>;
     try {
-      const res = await fetch("/api/releases", { cache: "no-store" });
-      if (res.ok && res.headers.get("content-type")?.includes("application/json")) {
-        data = await res.json();
-      } else {
-        data = browserGetDashboard();
-      }
+      const data: ReturnType<typeof browserGetDashboard> = IS_BROWSER_DEMO ? browserGetDashboard() : await fetchDashboard();
+      setUsers(data.users);
+      setReleases(data.releases);
+      setLogs(data.logs);
+      setPresets(data.presets);
+      setServerHasKey(data.geminiConfigured);
+      setSelectedId((id) => id ?? (data.releases.find((r) => r.status === "Pending_PM") ?? data.releases[0])?.id ?? null);
+      setLoadError(false);
+      return data.releases;
     } catch {
-      data = browserGetDashboard();
+      setLoadError(true);
+      return null;
+    } finally {
+      setLoading(false);
     }
-    setUsers(data.users);
-    setReleases(data.releases);
-    setLogs(data.logs);
-    setPresets(data.presets);
-    setServerHasKey(Boolean(data.geminiConfigured));
-    setLoading(false);
-    return data.releases as ReleaseRequest[];
   }, []);
 
   useEffect(() => {
     const savedUser = Number(localStorage.getItem(ACTIVE_USER_KEY));
     if (savedUser) setActiveUserId(savedUser);
     setApiKey(localStorage.getItem(API_KEY_STORAGE) || "");
-    load().then((list) => {
-      const first = list.find((r) => r.status === "Pending_PM") ?? list[0];
-      if (first) setSelectedId(first.id);
-    });
+    void load();
   }, [load]);
 
   const switchUser = (id: number) => {
     setActiveUserId(id);
-    setServerError(null);
+    setDecisionError(null);
     localStorage.setItem(ACTIVE_USER_KEY, String(id));
   };
 
-  // -------------------------------------------------------------------------
-  // Aksi (semua lewat API; server yang memutuskan boleh/tidak)
-  // -------------------------------------------------------------------------
-
-  async function post(url: string, body: Record<string, unknown>): Promise<{ status: number; data: Record<string, any> }> {
-    try {
-      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      if (res.status !== 404 && res.status !== 405 && res.headers.get("content-type")?.includes("application/json")) {
-        const data = await res.json().catch(() => ({}));
-        return { status: res.status, data };
-      }
-    } catch {
-      // Fallback to browser simulation store on static Cloudflare hosting
-    }
-    if (url === "/api/demo/reset") return { status: 200, data: browserResetDemo() };
-    if (url === "/api/releases") return browserCreateRelease(body);
-    const decMatch = url.match(/^\/api\/releases\/(\d+)\/decision$/);
-    if (decMatch) return browserDecide(Number(decMatch[1]), body);
-    const resubMatch = url.match(/^\/api\/releases\/(\d+)\/resubmit$/);
-    if (resubMatch) return browserResubmit(Number(resubMatch[1]), body);
-    const sumMatch = url.match(/^\/api\/releases\/(\d+)\/summary$/);
-    if (sumMatch) return browserRegenerateSummary(Number(sumMatch[1]), body);
-    return { status: 404, data: { error: "Endpoint tidak ditemukan." } };
+  function reportDecisionError(releaseId: number, status: number | null, data: Record<string, any>) {
+    const title = failureTitle(status);
+    const error = data.error || "Keputusan tidak dapat diproses.";
+    setDecisionError({ releaseId, title, error, logged: Boolean(data.release) });
+    notify({ title, detail: error, tone: "error" });
   }
 
   async function decide(release: ReleaseRequest, action: "APPROVE" | "REJECT", note: string, opts?: { omitLayer?: boolean }) {
     setBusy(true);
-    setServerError(null);
+    setDecisionError(null);
     const layer = { Pending_PM: 2, Pending_Core: 3, Pending_Interop: 4 }[release.status as string];
-    const { status, data } = await post(`/api/releases/${release.id}/decision`, {
+    const { status, data } = await postDemo(`/api/releases/${release.id}/decision`, {
       actor_id: activeUserId,
       action,
       note,
@@ -169,48 +184,56 @@ export default function RamaPage() {
     });
     await load();
     setBusy(false);
-    if (status >= 400) {
-      setServerError({ releaseId: release.id, httpStatus: status, error: data.error || "Ditolak server." });
-      notify({ title: `Server menolak (HTTP ${status})`, detail: data.error, tone: "error" });
+    if (status === null || status >= 400) {
+      reportDecisionError(release.id, status, data);
     } else {
-      notify({ title: action === "APPROVE" ? "Disetujui" : "Ditolak · Perlu revisi", detail: data.message, tone: action === "APPROVE" ? "success" : "info" });
+      notify({ title: action === "APPROVE" ? "Disetujui" : "Perlu revisi", detail: data.message, tone: action === "APPROVE" ? "success" : "info" });
     }
   }
 
   async function resubmit(release: ReleaseRequest, note: string) {
     setBusy(true);
-    setServerError(null);
-    const { status, data } = await post(`/api/releases/${release.id}/resubmit`, { actor_id: activeUserId, note });
+    setDecisionError(null);
+    const { status, data } = await postDemo(`/api/releases/${release.id}/resubmit`, { actor_id: activeUserId, note });
     await load();
     setBusy(false);
-    if (status >= 400) {
-      setServerError({ releaseId: release.id, httpStatus: status, error: data.error });
-      notify({ title: `Server menolak (HTTP ${status})`, detail: data.error, tone: "error" });
+    if (status === null || status >= 400) {
+      reportDecisionError(release.id, status, data);
     } else notify({ title: "Dikirim ulang", detail: data.message, tone: "success" });
   }
 
-  async function regenerate(release: ReleaseRequest) {
+  async function regenerate(release: ReleaseRequest, overrideKey?: string) {
     setRegenerating(true);
-    const { data } = await post(`/api/releases/${release.id}/summary`, { api_key: apiKey || undefined });
+    const keyToUse = (overrideKey ?? apiKey).trim();
+    const { status, data } = await postDemo(`/api/releases/${release.id}/summary`, { api_key: keyToUse || undefined });
     await load();
     setRegenerating(false);
-    notify({ title: "Ringkasan AI", detail: data.message, tone: data.release?.ai_source === "gemini" ? "success" : "info" });
+    if (status === null || status >= 400) {
+      notify({ title: failureTitle(status), detail: data.error, tone: "error" });
+    } else {
+      notify({ title: "Ringkasan AI", detail: data.message, tone: data.release?.ai_source === "gemini" ? "success" : "error" });
+    }
   }
 
   async function resetDemo() {
     setLoading(true);
-    await post("/api/demo/reset", {});
+    const { status, data } = await postDemo("/api/demo/reset", {});
+    if (status === null || status >= 400) {
+      setLoading(false);
+      notify({ title: failureTitle(status), detail: data.error, tone: "error" });
+      return;
+    }
     const list = await load();
-    setServerError(null);
-    setSelectedId((list.find((r) => r.status === "Pending_PM") ?? list[0])?.id ?? null);
+    setDecisionError(null);
+    if (list) setSelectedId((list.find((r) => r.status === "Pending_PM") ?? list[0])?.id ?? null);
     notify({ title: "Data simulasi direset", tone: "info" });
   }
 
   const decisionProps = (r: ReleaseRequest) => ({
     release: r,
     user: activeUser,
-    busy,
-    serverError,
+    busy: busy || loadError,
+    decisionError,
     onDecide: (action: "APPROVE" | "REJECT", note: string) => decide(r, action, note),
     onResubmit: (note: string) => resubmit(r, note),
     onSelfApproveTest: () => decide(r, "APPROVE", "Saya setujui sendiri saja.", { omitLayer: true }),
@@ -258,7 +281,7 @@ export default function RamaPage() {
       )}
 
       {/* HEADER */}
-      <header className="sticky top-0 z-30 border-b border-slate-800 bg-[#071124]/95 backdrop-blur">
+      <header className="top-0 z-30 border-b border-slate-800 bg-[#071124]/95 backdrop-blur sm:sticky">
         <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-amber-400/40 bg-[#0b1a33]">
@@ -330,38 +353,46 @@ export default function RamaPage() {
       </header>
 
       <main className="mx-auto max-w-[1440px] space-y-5 px-4 py-5 sm:px-6">
+        {loadError && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-500/40 bg-rose-950/30 p-3 text-sm text-rose-100">
+            Data demo gagal dimuat. Coba ambil status terbaru sebelum memutuskan.
+            <button onClick={() => void load()} className="rounded-lg bg-slate-800 px-3 py-2 text-xs font-semibold">Muat ulang data</button>
+          </div>
+        )}
         {/* 4 layer branch */}
-        <section className="rounded-2xl border border-slate-800 bg-[#0a1630] p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-300">Alur 4 layer branch · satu Release Request = satu MR per layer</h2>
-            <span className="flex items-center gap-1 text-[11px] text-slate-400">
-              <ShieldAlert className="h-3.5 w-3.5 text-amber-400" /> Wewenang ditegakkan di server
-            </span>
-          </div>
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-            {LAYERS.map((l) => {
-              const isMine = activeUser?.role === l.role;
-              const count = l.status ? counts[l.status] : null;
-              return (
-                <div key={l.layer} className={`rounded-xl border p-3 ${isMine ? "border-amber-400/60 bg-amber-500/5" : "border-slate-800 bg-slate-900/60"}`}>
-                  <div className="flex items-center justify-between text-[10px] text-slate-500">
-                    <span className="font-mono font-bold text-amber-300/90">LAYER {l.layer}</span>
-                    {count !== null && <span className="rounded bg-slate-800 px-1.5 text-slate-200">{count} menunggu</span>}
+        {tab !== "mobile" && (
+          <section className="rounded-2xl border border-slate-800 bg-[#0a1630] p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-300">Alur 4 layer branch · satu Release Request = satu MR per layer</h2>
+              <span className="flex items-center gap-1 text-[11px] text-slate-400">
+                <ShieldAlert className="h-3.5 w-3.5 text-amber-400" /> {IS_BROWSER_DEMO ? "Simulasi browser · data tersimpan di perangkat ini" : "Aturan keputusan diperiksa oleh API demo"}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+              {LAYERS.map((l) => {
+                const isMine = activeUser?.role === l.role;
+                const count = l.status ? counts[l.status] : null;
+                return (
+                  <div key={l.layer} className={`rounded-xl border p-3 ${isMine ? "border-amber-400/60 bg-amber-500/5" : "border-slate-800 bg-slate-900/60"}`}>
+                    <div className="flex items-center justify-between text-[10px] text-slate-500">
+                      <span className="font-mono font-bold text-amber-300/90">LAYER {l.layer}</span>
+                      {count !== null && <span className="rounded bg-slate-800 px-1.5 text-slate-200">{count} menunggu</span>}
+                    </div>
+                    <p className="mt-1 font-mono text-xs text-white">
+                      {l.source} → {l.target}
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      Otoritas: <span className="text-slate-200">{ROLE_LABEL[l.role]}</span>
+                    </p>
+                    <p className="text-[10px] text-slate-500">
+                      {l.layer === 1 ? "Selesai saat Release Request dibuat" : l.layer === 4 ? `Approve → Dirilis (simulasi) · ${counts.Approved} dirilis` : `Status: ${l.status}`}
+                    </p>
                   </div>
-                  <p className="mt-1 font-mono text-xs text-white">
-                    {l.source} → {l.target}
-                  </p>
-                  <p className="text-[11px] text-slate-400">
-                    Otoritas: <span className="text-slate-200">{ROLE_LABEL[l.role]}</span>
-                  </p>
-                  <p className="text-[10px] text-slate-500">
-                    {l.layer === 1 ? "Selesai saat Release Request dibuat" : l.layer === 4 ? `Approve → Dirilis (simulasi) · ${counts.Approved} dirilis` : `Status: ${l.status}`}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </section>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Tabs */}
         <nav className="flex flex-wrap gap-2 border-b border-slate-800 pb-3">
@@ -414,7 +445,7 @@ export default function RamaPage() {
                             key={r.id}
                             onClick={() => {
                               setSelectedId(r.id);
-                              setServerError(null);
+                              setDecisionError(null);
                             }}
                             className={`block w-full rounded-xl border p-3 text-left transition ${
                               isSel ? "border-amber-400 bg-slate-900 ring-1 ring-amber-400/30" : "border-slate-800 bg-slate-900/60 hover:border-slate-700"
@@ -458,11 +489,17 @@ export default function RamaPage() {
                   <p className="mt-1 text-[11px] text-slate-300">{waitingText(selected, now)}</p>
                 </div>
 
-                <DecisionPanel {...decisionProps(selected)} />
+                <AiSummaryBlock
+                  release={selected}
+                  canRegenerate={aiEnabled}
+                  regenerating={regenerating}
+                  onRegenerate={() => regenerate(selected)}
+                  onConfigureKey={() => setShowKeyModal(true)}
+                />
                 <RuleFlags release={selected} />
-                <AiSummaryBlock release={selected} canRegenerate={aiEnabled} regenerating={regenerating} onRegenerate={() => regenerate(selected)} />
                 <DeveloperQuestions release={selected} />
                 <RollbackPlan release={selected} />
+                <DecisionPanel {...decisionProps(selected)} />
 
                 <section className="rounded-xl border border-slate-800 bg-[#0b172e] p-3">
                   <h4 className="mb-2 text-xs font-bold text-white">MR per layer (simulasi)</h4>
@@ -508,19 +545,20 @@ export default function RamaPage() {
           <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
             <div className="flex flex-col items-center lg:col-span-5">
               <p className="mb-2 text-[11px] text-slate-400">
-                Tampilan di HP approver · masuk sebagai <strong className="text-white">{activeUser?.name}</strong> ({activeUser && ROLE_LABEL[activeUser.role]})
+                Approver · <strong className="text-white">{activeUser?.name}</strong> ({activeUser && ROLE_LABEL[activeUser.role]})
               </p>
               <div className="w-full max-w-[390px] overflow-hidden rounded-[36px] border-[8px] border-slate-800 bg-[#071022] shadow-2xl">
                 <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950 px-5 py-2 text-[10px] text-slate-400">
                   <span className="font-bold text-slate-200">RAMA</span>
-                  <span className="rounded-full border border-amber-400/40 px-1.5 text-[9px] text-amber-300">Simulasi</span>
+                  <span className="rounded-full border border-amber-400/40 px-1.5 text-[10px] text-amber-300">{IS_BROWSER_DEMO ? "Simulasi browser" : "Simulasi via API"}</span>
                 </div>
-                <div className="max-h-[680px] space-y-2.5 overflow-y-auto p-3.5">
+                <div className="space-y-2.5 p-3.5 lg:max-h-[680px] lg:overflow-y-auto">
                   <select
+                    aria-label="Pilih release request"
                     value={selected.id}
                     onChange={(e) => {
                       setSelectedId(Number(e.target.value));
-                      setServerError(null);
+                      setDecisionError(null);
                     }}
                     className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-[11px] font-semibold text-amber-300"
                   >
@@ -541,9 +579,17 @@ export default function RamaPage() {
                     </div>
                     <p className="mt-1 text-[10px] text-slate-400">{waitingText(selected, now)}</p>
                   </div>
+                  <AiSummaryBlock
+                    release={selected}
+                    compact
+                    canRegenerate={aiEnabled}
+                    regenerating={regenerating}
+                    onRegenerate={() => regenerate(selected)}
+                    onConfigureKey={() => setShowKeyModal(true)}
+                  />
                   <RuleFlags release={selected} compact />
-                  <AiSummaryBlock release={selected} compact />
                   <DeveloperQuestions release={selected} />
+                  <RollbackPlan release={selected} />
                   <DecisionPanel {...decisionProps(selected)} />
                 </div>
               </div>
@@ -551,12 +597,7 @@ export default function RamaPage() {
 
             <div className="space-y-3 lg:col-span-7">
               <div className="rounded-2xl border border-slate-800 bg-[#0b172e] p-4">
-                <p className="text-[11px] font-bold uppercase tracking-wider text-rose-400">Tanpa RAMA</p>
-                <h3 className="mt-0.5 text-sm font-extrabold text-white">Approver non-teknis hanya menerima diff mentah lewat grup WhatsApp</h3>
-                <p className="mt-1 text-xs text-slate-400">
-                  Di sebelah kiri, approver melihat penanda aturan yang bisa ditelusuri ke file tertentu, ringkasan bantuan AI yang diberi label jelas, dan
-                  pertanyaan yang perlu diajukan ke developer. Keputusan tetap di tangan penanggung jawab layer.
-                </p>
+                <h3 className="text-sm font-extrabold text-white">Diff untuk verifikasi teknis</h3>
                 <div className="mt-3 overflow-hidden rounded-xl border border-slate-800 bg-[#050a14]">
                   <div className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-900 px-3 py-1.5 text-[11px] text-slate-300">
                     <Terminal className="h-3.5 w-3.5 text-amber-400" /> {selected.kode} · diff (rahasia disamarkan)
@@ -577,7 +618,7 @@ export default function RamaPage() {
                   <Database className="h-4 w-4 text-amber-400" /> approval_logs · {logs.length} entri
                 </h3>
                 <span className="text-[10px] text-slate-500">
-                  Termasuk percobaan yang ditolak server (DITOLAK_SISTEM). Sumber semua entri: simulasi.
+                  Termasuk percobaan DITOLAK_SISTEM. {IS_BROWSER_DEMO ? "Jejak simulasi di browser ini." : "Jejak simulasi dari API demo."}
                 </span>
               </div>
               <div className="overflow-x-auto">
@@ -661,18 +702,17 @@ export default function RamaPage() {
             </div>
             <ul className="list-disc space-y-1 pl-4 text-xs text-slate-300">
               <li>
-                Dengan API key: ringkasan dibuat live oleh <code>gemini-3.8-flash</code>, dibatasi ke ringkasan, dampak pengguna, dan pertanyaan. Tanpa level risiko,
-                tanpa angka, tanpa klaim aman.
+                Ringkasan perubahan dibuat secara langsung (live) oleh <strong>Gemini AI</strong> (<code>gemini-3.5-flash-lite</code> / <code>gemini-3.1-flash-lite</code>), dibatasi ke ringkasan, dampak pengguna, dan pertanyaan untuk developer.
               </li>
-              <li>Tanpa API key: skenario preset menampilkan teks berlabel “Contoh output AI”; diff kustom menampilkan “Ringkasan AI tidak tersedia”.</li>
-              <li>Level risiko selalu dari rule engine, apa pun mode AI-nya.</li>
+              <li>Tanpa contoh statis: jika API key belum dipasang, bagian AI menampilkan tombol untuk membuat ringkasan atau memasang key.</li>
+              <li>Level risiko (<code>LOW</code> / <code>MEDIUM</code> / <code>HIGH</code>) selalu dihitung oleh Rule Engine deterministik, bukan AI.</li>
             </ul>
             {serverHasKey && <p className="text-[11px] text-emerald-300">GEMINI_API_KEY sudah terpasang di server.</p>}
             <input
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder="AIza… (disimpan di browser ini saja)"
+              placeholder="AQ.… atau AIza… (disimpan di browser ini saja)"
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-white"
             />
             <div className="flex justify-end gap-2">
@@ -688,12 +728,17 @@ export default function RamaPage() {
               </button>
               <button
                 onClick={() => {
-                  localStorage.setItem(API_KEY_STORAGE, apiKey);
+                  const trimmed = apiKey.trim();
+                  setApiKey(trimmed);
+                  localStorage.setItem(API_KEY_STORAGE, trimmed);
                   setShowKeyModal(false);
+                  if (trimmed && selected && !selected.ai_summary) {
+                    void regenerate(selected, trimmed);
+                  }
                 }}
                 className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-slate-950"
               >
-                Simpan
+                Simpan & Buat Ringkasan
               </button>
             </div>
           </div>
@@ -774,29 +819,9 @@ function CreateReleaseModal({
       preset_key: presetKey || undefined,
       api_key: apiKey || undefined,
     };
-    let status = 500;
-    let data: Record<string, any> = {};
-    try {
-      const res = await fetch("/api/releases", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (res.status !== 404 && res.status !== 405 && res.headers.get("content-type")?.includes("application/json")) {
-        status = res.status;
-        data = await res.json();
-      } else {
-        const fb = await browserCreateRelease(payload);
-        status = fb.status;
-        data = fb.data;
-      }
-    } catch {
-      const fb = await browserCreateRelease(payload);
-      status = fb.status;
-      data = fb.data;
-    }
+    const { status, data } = await postDemo("/api/releases", payload);
     setSubmitting(false);
-    if (status >= 400) return setError(`HTTP ${status}: ${data.error}`);
+    if (status === null || status >= 400) return setError(`${failureTitle(status)}. ${data.error || "Gagal membuat request."}`);
     onCreated(data.release as ReleaseRequest);
   }
 

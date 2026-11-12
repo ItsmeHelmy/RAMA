@@ -6,8 +6,7 @@
  * Layer 3  staging → master                Tim Core   status: Pending_Core
  * Layer 4  master  → release/production    Tim Interop status: Pending_Interop
  *
- * Semua validasi wewenang dijalankan di server (lihat validateDecision /
- * validateResubmit). UI hanya mencerminkan aturan ini, tidak menggantikannya.
+ * API Node.js dan simulasi browser menjalankan aturan keputusan yang sama.
  */
 import { ReleaseRequest, ReleaseStatus, RiskLevel, User, UserRole } from "./types";
 
@@ -76,7 +75,7 @@ export interface DecisionSuccess {
  * 3. Role aktor = role yang dibutuhkan layer saat ini.
  * 4. Jika klien menyebut layer, harus sama dengan layer saat ini (tidak boleh melompat).
  * 5. Reject wajib alasan; approve risiko HIGH wajib catatan.
- * State tujuan selalu dihitung server — klien tidak pernah menentukan state tujuan.
+ * Fungsi ini menghitung state tujuan berdasarkan keputusan dan state saat ini.
  */
 export function validateDecision(params: {
   release: Pick<ReleaseRequest, "status" | "author_id" | "risk_level">;

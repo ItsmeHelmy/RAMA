@@ -6,13 +6,13 @@
  * as the Node.js SQLite backend, persisting state in localStorage so the
  * public Cloudflare deployment works 100% interactively without requiring a Node VM.
  */
-import { GoogleGenAI } from "@google/genai";
+import { summarizeChange } from "./ai-summary";
 import { evaluateRisk, maskSecrets, parseChangedFiles } from "./risk-engine";
-import { findPreset, SCENARIO_PRESETS, SEED_APPROVAL_NOTES, SEED_RELEASES } from "./mock-scenarios";
-import { DecisionAction, LAYER_BY_STATUS, LAYERS, validateDecision, validateResubmit } from "./workflow";
-import { AISource, AISummary, ApprovalLog, ReleaseMR, ReleaseRequest, User } from "./types";
+import { SCENARIO_PRESETS, SEED_APPROVAL_NOTES, SEED_RELEASES } from "./mock-scenarios";
+import { LAYER_BY_STATUS, LAYERS, validateDecision, validateResubmit } from "./workflow";
+import { ApprovalLog, ReleaseMR, ReleaseRequest, User } from "./types";
 
-const STORAGE_KEY = "RAMA_CF_SIM_STATE_V1";
+const STORAGE_KEY = "RAMA_CF_SIM_STATE_V2";
 const BLOCKED_STATUS = "DITOLAK_SISTEM";
 
 interface SimState {
@@ -224,8 +224,8 @@ function createInitialSeedState(): SimState {
       triggered_rules: risk.triggeredRules,
       changed_files: files,
       git_diff: masked,
-      ai_summary: preset.contohSummary,
-      ai_source: "contoh",
+      ai_summary: null,
+      ai_source: "tidak_tersedia",
       rollback_plan: preset.rollback_plan,
       iterasi: 1,
       created_at: at(0),
@@ -268,52 +268,12 @@ function saveState(state: SimState) {
   }
 }
 
-async function summarizeInBrowser(params: {
-  judul: string;
-  maskedDiff: string;
-  presetKey?: string;
-  rawDiffForPresetMatch?: string;
-  apiKey?: string;
-}): Promise<{ summary: AISummary | null; source: AISource }> {
-  const key = params.apiKey?.trim();
-  if (key) {
-    try {
-      const ai = new GoogleGenAI({ apiKey: key });
-      const res = await ai.interactions.create({
-        model: "gemini-3.8-flash",
-        system_instruction:
-          "Anda membantu approver non-teknis di BSI UII memahami git diff. Tulis Bahasa Indonesia sederhana. JANGAN menyebut level risiko (LOW/MEDIUM/HIGH), JANGAN klaim aman, JANGAN menulis angka/estimasi waktu.",
-        input: `Judul perubahan: ${params.judul}\n\n<diff>\n${params.maskedDiff.slice(0, 12000)}\n</diff>`,
-        response_format: {
-          type: "text",
-          mime_type: "application/json",
-          schema: {
-            type: "object",
-            properties: {
-              ringkasan: { type: "string" },
-              dampak_pengguna: { type: "array", items: { type: "string" } },
-              pertanyaan_untuk_developer: { type: "array", items: { type: "string" } },
-            },
-            required: ["ringkasan", "dampak_pengguna", "pertanyaan_untuk_developer"],
-          },
-        },
-        store: false,
-      });
-      if (res.output_text) {
-        const parsed = JSON.parse(res.output_text) as AISummary;
-        if (parsed.ringkasan) return { summary: parsed, source: "gemini" };
-      }
-    } catch (err) {
-      console.warn("[RAMA Browser AI] Gagal memanggil Gemini:", err);
-    }
-    return { summary: null, source: "tidak_tersedia" };
-  }
-
-  const preset = findPreset(params.presetKey) || SCENARIO_PRESETS.find((p) => p.git_diff.trim() === params.rawDiffForPresetMatch?.trim());
-  if (preset && params.rawDiffForPresetMatch?.trim() === preset.git_diff.trim()) {
-    return { summary: preset.contohSummary, source: "contoh" };
-  }
-  return { summary: null, source: "tidak_tersedia" };
+function labelBrowserLog(log: ApprovalLog): ApprovalLog {
+  const comment = log.comment.replace(
+    /^(Percobaan (?:APPROVE|REJECT|kirim ulang)) ditolak server \((\d+)\):/,
+    "$1 ditolak oleh aturan demo (kode simulasi $2):"
+  );
+  return comment === log.comment ? log : { ...log, comment };
 }
 
 export function browserGetDashboard() {
@@ -322,8 +282,8 @@ export function browserGetDashboard() {
     ok: true,
     mode: "simulasi",
     users: state.users,
-    releases: state.releases,
-    logs: state.logs,
+    releases: state.releases.map((release) => ({ ...release, logs: release.logs.map(labelBrowserLog) })),
+    logs: state.logs.map(labelBrowserLog),
     presets: SCENARIO_PRESETS.map(({ contohSummary: _omit, ...p }) => p),
     geminiConfigured: false,
   };
@@ -362,7 +322,7 @@ export async function browserCreateRelease(body: Record<string, unknown>): Promi
   const files = parseChangedFiles(gitDiff);
   const risk = evaluateRisk(files, gitDiff);
   const { masked } = maskSecrets(gitDiff);
-  const ai = await summarizeInBrowser({
+  const ai = await summarizeChange({
     judul,
     maskedDiff: masked,
     presetKey: body.preset_key ? String(body.preset_key) : undefined,
@@ -440,7 +400,10 @@ export function browserDecide(releaseId: number, body: Record<string, unknown>):
   const release = state.releases.find((r) => r.id === releaseId);
   if (!release) return { status: 404, data: { ok: false, error: "Release Request tidak ditemukan." } };
 
-  const action = body.action as DecisionAction;
+  const action = body.action;
+  if (action !== "APPROVE" && action !== "REJECT") {
+    return { status: 400, data: { ok: false, error: "Aksi harus APPROVE atau REJECT." } };
+  }
   const note = typeof body.note === "string" ? body.note.trim() : "";
   const requestedLayer = body.layer !== undefined ? Number(body.layer) : undefined;
 
@@ -460,7 +423,7 @@ export function browserDecide(releaseId: number, body: Record<string, unknown>):
       action: "BLOCKED",
       from_status: release.status,
       to_status: BLOCKED_STATUS,
-      comment: `Percobaan ${action} ditolak server (${check.httpStatus}): ${check.error}${note ? ` · Catatan aktor: "${note}"` : ""}`,
+      comment: `Percobaan ${action} ditolak oleh aturan demo (kode simulasi ${check.httpStatus}): ${check.error}${note ? ` · Catatan aktor: "${note}"` : ""}`,
       source: "simulasi",
       created_at: now,
     };
@@ -539,7 +502,7 @@ export function browserResubmit(releaseId: number, body: Record<string, unknown>
       action: "BLOCKED",
       from_status: release.status,
       to_status: BLOCKED_STATUS,
-      comment: `Percobaan kirim ulang ditolak server (${check.httpStatus}): ${check.error}`,
+      comment: `Percobaan kirim ulang ditolak oleh aturan demo (kode simulasi ${check.httpStatus}): ${check.error}`,
       source: "simulasi",
       created_at: now,
     };
@@ -591,7 +554,7 @@ export async function browserRegenerateSummary(releaseId: number, body: Record<s
   const release = state.releases.find((r) => r.id === releaseId);
   if (!release) return { status: 404, data: { ok: false, error: "Release Request tidak ditemukan." } };
 
-  const ai = await summarizeInBrowser({
+  const ai = await summarizeChange({
     judul: release.judul,
     maskedDiff: release.git_diff,
     rawDiffForPresetMatch: release.git_diff,
@@ -606,7 +569,10 @@ export async function browserRegenerateSummary(releaseId: number, body: Record<s
     data: {
       ok: true,
       release,
-      message: ai.source === "gemini" ? "Ringkasan dibuat ulang oleh Gemini." : ai.source === "contoh" ? "Menampilkan contoh output AI." : "Ringkasan AI tidak tersedia.",
+      message:
+        ai.source === "gemini"
+          ? "Ringkasan berhasil dibuat oleh Gemini AI."
+          : `Ringkasan AI tidak tersedia${ai.error ? `: ${ai.error}` : "."}`,
     },
   };
 }

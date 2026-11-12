@@ -187,7 +187,7 @@ export function seedDemoData(db: DatabaseSync) {
   const insertRelease = db.prepare(`
     INSERT INTO release_requests (kode, judul, modul, repo, feature_branch, author_id, status, risk_level,
       triggered_rules_json, changed_files_json, git_diff_masked, ai_summary_json, ai_source, rollback_plan, iterasi, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 'contoh', ?, 1, ?, ?)
+    VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, NULL, 'tidak_tersedia', ?, 1, ?, ?)
   `);
 
   const now = Date.now();
@@ -209,7 +209,7 @@ export function seedDemoData(db: DatabaseSync) {
 
     const res = insertRelease.run(
       seed.kode, preset.judul, preset.modul, preset.repo, preset.feature_branch, seed.status, risk.level,
-      JSON.stringify(risk.triggeredRules), JSON.stringify(files), masked, JSON.stringify(preset.contohSummary),
+      JSON.stringify(risk.triggeredRules), JSON.stringify(files), masked,
       preset.rollback_plan, at(0), lastAt
     );
     const releaseId = Number(res.lastInsertRowid);

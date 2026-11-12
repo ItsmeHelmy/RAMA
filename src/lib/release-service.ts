@@ -188,6 +188,9 @@ export async function regenerateSummary(input: { releaseId: number; apiKey?: str
   return {
     ok: true,
     release: getRelease(release.id)!,
-    message: ai.source === "gemini" ? "Ringkasan dibuat ulang oleh Gemini." : ai.source === "contoh" ? "Menampilkan contoh output AI." : "Ringkasan AI tidak tersedia.",
+    message:
+      ai.source === "gemini"
+        ? "Ringkasan berhasil dibuat oleh Gemini AI."
+        : `Ringkasan AI tidak tersedia${ai.error ? `: ${ai.error}` : "."}`,
   };
 }

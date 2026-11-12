@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -210,7 +210,7 @@ export function RuleFlags({ release, compact = false }: { release: ReleaseReques
             </span>
             <span className="text-slate-300">
               {r.file ? <span className="font-mono text-slate-200 break-all">{r.file}</span> : <span className="text-slate-200">{r.label}</span>}
-              {r.file && !compact && <span className="text-slate-500"> · {r.label}</span>}
+              {r.file && <span className="text-slate-400"> · {r.label}</span>}
               {r.detail && <span className="text-slate-500"> · {r.detail}</span>}
             </span>
           </li>
@@ -231,16 +231,17 @@ export function AiSummaryBlock({
   canRegenerate,
   regenerating,
   onRegenerate,
+  onConfigureKey,
 }: {
   release: ReleaseRequest;
   compact?: boolean;
   canRegenerate?: boolean;
   regenerating?: boolean;
   onRegenerate?: () => void;
+  onConfigureKey?: () => void;
 }) {
   const s = release.ai_summary;
-  const sourceChip =
-    release.ai_source === "gemini" ? "Gemini · gemini-3.8-flash" : release.ai_source === "contoh" ? "Contoh output AI" : "Tidak tersedia";
+  const sourceChip = release.ai_source === "gemini" && s ? "Gemini AI · Live" : "Belum dibuat";
   return (
     <section className="rounded-xl border border-indigo-500/30 bg-indigo-950/20 p-3">
       <div className="mb-1 flex items-center justify-between gap-2">
@@ -252,22 +253,30 @@ export function AiSummaryBlock({
           <span className="rounded border border-indigo-400/30 bg-indigo-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-200">
             {sourceChip}
           </span>
-          {canRegenerate && onRegenerate && (
+          {canRegenerate && onRegenerate ? (
             <button
               onClick={onRegenerate}
               disabled={regenerating}
-              className="rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300 hover:text-white disabled:opacity-50"
+              className="rounded border border-indigo-400/40 bg-indigo-500/20 px-2 py-0.5 text-[10px] font-bold text-indigo-100 hover:bg-indigo-500/30 disabled:opacity-50"
             >
-              {regenerating ? "Memproses…" : "Buat ulang"}
+              {regenerating ? "Memproses…" : s ? "Buat ulang" : "Buat Ringkasan AI"}
             </button>
+          ) : (
+            onConfigureKey && (
+              <button
+                onClick={onConfigureKey}
+                className="rounded border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-200 hover:bg-amber-500/25"
+              >
+                Pasang API Key
+              </button>
+            )
           )}
         </div>
       </div>
-      <p className="mb-2 text-[10px] italic text-indigo-300/80">Dibuat AI sebagai bantuan, dapat keliru. Verifikasi ke developer.</p>
+      <p className="mb-2 text-[10px] italic text-indigo-300/80">Dibuat langsung oleh Gemini AI sebagai bantuan, dapat keliru. Verifikasi ke developer.</p>
 
       {s ? (
         <div className="space-y-2 text-[11px] text-slate-200">
-          <p>{s.ringkasan}</p>
           {s.dampak_pengguna.length > 0 && (
             <div>
               <p className="mb-0.5 font-semibold text-indigo-200">Dampak ke pengguna</p>
@@ -278,11 +287,26 @@ export function AiSummaryBlock({
               </ul>
             </div>
           )}
+          <p>{s.ringkasan}</p>
         </div>
       ) : (
         <div className="rounded-lg border border-dashed border-slate-700 p-2.5 text-[11px] text-slate-400">
-          <p className="font-semibold text-slate-300">Ringkasan AI tidak tersedia.</p>
-          <p>Penanda aturan dan tombol keputusan tetap berfungsi. Baca diff atau tanyakan langsung ke developer.</p>
+          <p className="font-semibold text-slate-300">
+            {regenerating
+              ? "Sedang membuat ringkasan perubahan menggunakan Gemini AI…"
+              : canRegenerate
+              ? "Ringkasan AI belum dibuat untuk perubahan ini."
+              : "Ringkasan AI tidak tersedia (API Key Gemini belum dipasang)."}
+          </p>
+          <p className="mt-0.5">Penanda aturan dan tombol keputusan tetap berfungsi. Baca diff atau tanyakan langsung ke developer.</p>
+          {canRegenerate && onRegenerate && !regenerating && (
+            <button
+              onClick={onRegenerate}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-400"
+            >
+              <Bot className="h-3.5 w-3.5" /> Buat Ringkasan dengan Gemini AI
+            </button>
+          )}
         </div>
       )}
     </section>
@@ -336,20 +360,21 @@ export function RollbackPlan({ release }: { release: ReleaseRequest }) {
 }
 
 // ---------------------------------------------------------------------------
-// P1: Panel keputusan (wewenang ditegakkan server; UI hanya mencerminkan)
+// Panel keputusan untuk kedua mode simulasi
 // ---------------------------------------------------------------------------
 
-export interface ServerError {
+export interface DecisionError {
   releaseId: number;
-  httpStatus: number;
+  title: string;
   error: string;
+  logged: boolean;
 }
 
 export function DecisionPanel({
   release,
   user,
   busy,
-  serverError,
+  decisionError,
   onDecide,
   onResubmit,
   onSelfApproveTest,
@@ -357,26 +382,27 @@ export function DecisionPanel({
   release: ReleaseRequest;
   user: User | undefined;
   busy: boolean;
-  serverError: ServerError | null;
+  decisionError: DecisionError | null;
   onDecide: (action: "APPROVE" | "REJECT", note: string) => void;
   onResubmit: (note: string) => void;
   onSelfApproveTest: () => void;
 }) {
   const [note, setNote] = useState("");
-  useEffect(() => setNote(""), [release.id, release.status]);
+  const noteId = useId();
+  useEffect(() => setNote(""), [release.id, release.status, user?.id]);
 
   const requiredRole = REQUIRED_ROLE_BY_STATUS[release.status];
   const permission = canDecide(release, user);
   const isAuthor = user?.id === release.author_id;
-  const err = serverError && serverError.releaseId === release.id ? serverError : null;
+  const err = decisionError?.releaseId === release.id ? decisionError : null;
 
   const errorBox = err && (
-    <div className="rounded-lg border border-rose-500/50 bg-rose-950/40 p-2.5 text-[11px] text-rose-100">
+    <div role="alert" className="rounded-lg border border-rose-500/50 bg-rose-950/40 p-2.5 text-[11px] text-rose-100">
       <p className="flex items-center gap-1.5 font-bold">
-        <XCircle className="h-3.5 w-3.5 text-rose-400" /> Server menolak · HTTP {err.httpStatus}
+        <XCircle className="h-3.5 w-3.5 text-rose-400" /> {err.title}
       </p>
       <p className="mt-0.5">{err.error}</p>
-      <p className="mt-1 text-[10px] text-rose-300/80">Percobaan ini dicatat di Audit Trail dengan status DITOLAK_SISTEM.</p>
+      {err.logged && <p className="mt-1 text-[10px] text-rose-300/80">Percobaan ini dicatat di Audit Trail sebagai DITOLAK_SISTEM.</p>}
     </div>
   );
 
@@ -441,15 +467,22 @@ export function DecisionPanel({
 
       {permission.allowed && (
         <>
+          <label htmlFor={noteId} className="block text-[11px] font-semibold text-slate-200">
+            {noteRequired ? "Dasar keputusan untuk risiko HIGH" : "Catatan keputusan"}
+          </label>
           <textarea
+            id={noteId}
+            aria-describedby={`${noteId}-help`}
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            rows={2}
-            placeholder={noteRequired ? "Catatan wajib (risiko HIGH)…" : "Catatan (wajib jika reject)…"}
-            className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-[11px] text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none"
+            rows={3}
+            placeholder={noteRequired ? "Bukti apa yang sudah Anda periksa? Apa yang masih perlu dijawab?" : "Apa yang sudah diperiksa atau perlu diperbaiki?"}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-sm text-white placeholder:text-slate-400 focus:border-amber-400 focus:outline-none"
           />
-          <p className="text-[10px] text-slate-500">
-            Reject wajib alasan ≥ {MIN_NOTE_LENGTH} karakter{noteRequired ? `; approve risiko HIGH wajib catatan ≥ ${MIN_NOTE_LENGTH} karakter` : ""}. Divalidasi server.
+          <p id={`${noteId}-help`} className="text-[11px] text-slate-400">
+            {noteRequired
+              ? `Tulis bukti yang diperiksa saat menyetujui, atau hal yang perlu diperbaiki saat meminta revisi. Minimal ${MIN_NOTE_LENGTH} karakter.`
+              : `Permintaan revisi wajib berisi alasan, minimal ${MIN_NOTE_LENGTH} karakter.`}
           </p>
         </>
       )}
@@ -461,7 +494,7 @@ export function DecisionPanel({
             onClick={() => onDecide("APPROVE", note)}
             className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-500 py-2 text-xs font-bold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-35"
           >
-            <ThumbsUp className="h-3.5 w-3.5" /> Approve
+            <ThumbsUp className="h-3.5 w-3.5" /> Setujui
           </button>
         </span>
         <span title={permission.allowed ? "" : permission.reason} className="block">
@@ -470,7 +503,7 @@ export function DecisionPanel({
             onClick={() => onDecide("REJECT", note)}
             className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/15 py-2 text-xs font-bold text-rose-200 hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-35"
           >
-            <ThumbsDown className="h-3.5 w-3.5" /> Reject
+            <ThumbsDown className="h-3.5 w-3.5" /> Minta revisi
           </button>
         </span>
       </div>
@@ -487,7 +520,7 @@ export function DecisionPanel({
           onClick={onSelfApproveTest}
           className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-amber-400/50 bg-amber-500/5 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-500/10"
         >
-          <FlaskConical className="h-3.5 w-3.5" /> Coba approve request milik sendiri (panggil API sungguhan)
+          <FlaskConical className="h-3.5 w-3.5" /> Uji persetujuan request sendiri
         </button>
       )}
 

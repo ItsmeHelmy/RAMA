@@ -60,7 +60,7 @@ const R5_PATTERN =
 /** Pola rahasia (R4). Setiap pola menangkap nilai yang akan disamarkan. */
 const SECRET_PATTERNS: { name: string; regex: RegExp }[] = [
   { name: "Private key", regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g },
-  { name: "Google API key", regex: /AIza[0-9A-Za-z\-_]{35}/g },
+  { name: "Google API key", regex: /(?:AIza[0-9A-Za-z\-_]{35}|AQ\.[0-9A-Za-z\-_]{30,})/g },
   { name: "GitLab token", regex: /glpat-[0-9A-Za-z\-_]{20,}/g },
   { name: "AWS access key", regex: /AKIA[0-9A-Z]{16}/g },
   {
